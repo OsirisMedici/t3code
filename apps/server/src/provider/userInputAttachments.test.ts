@@ -578,6 +578,21 @@ describe("question answer paths", () => {
           ext: "xlsx",
           bounded: true,
           parts: {
+            "xl/workbook.xml": '<workbook><sheet name="Phonetics" r:id="a"/></workbook>',
+            "xl/_rels/workbook.xml.rels":
+              '<Relationships><Relationship Id="a" Target="worksheets/a.xml"/></Relationships>',
+            "xl/sharedStrings.xml":
+              '<sst><si><t>東京</t><rPh sb="0" eb="2"><t>とうきょう</t></rPh></si></sst>',
+            "xl/worksheets/a.xml":
+              '<worksheet><row><c t="s"><v>0</v></c><c t="inlineStr"><is><t>東京</t><rPh sb="0" eb="2"><t>とうきょう</t></rPh></is></c></row></worksheet>',
+          },
+          expected: ["## Sheet: Phonetics", "東京\t東京"],
+          absent: ["とうきょう"],
+        },
+        {
+          ext: "xlsx",
+          bounded: true,
+          parts: {
             "xl/workbook.xml":
               '<workbook><workbookPr date1904="true"/><sheets><sheet name="Dates" r:id="a"/></sheets></workbook>',
             "xl/_rels/workbook.xml.rels":

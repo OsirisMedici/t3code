@@ -67,7 +67,7 @@ function* all(node: XmlNode, name: string | readonly string[]): Generator<XmlNod
   }
 }
 function* text(node: XmlNode): Generator<string, void> {
-  if (["script", "style", "binary-data"].includes(node.name)) return;
+  if (["script", "style", "binary-data", "rPh"].includes(node.name)) return;
   if (["tab", "cell"].includes(node.name)) yield "\t";
   else if (["br", "line-break", "cr"].includes(node.name)) yield "\n";
   else if (node.spaceCount !== undefined) {
@@ -137,7 +137,10 @@ function odfValue(cell: XmlNode): string {
 function hasCellText(cell: XmlNode): boolean {
   if (odfValue(cell).trim()) return true;
   // Space markers can have enormous repeat counts; emptiness never requires expanding them.
-  if (["script", "style", "binary-data"].includes(cell.name) || cell.spaceCount !== undefined)
+  if (
+    ["script", "style", "binary-data", "rPh"].includes(cell.name) ||
+    cell.spaceCount !== undefined
+  )
     return false;
   return cell.children.some((child) =>
     typeof child === "string" ? !!child.trim() : hasCellText(child),
