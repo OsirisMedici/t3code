@@ -192,7 +192,20 @@ describe("question answer paths", () => {
           {
             cell_type: "code",
             source: ["print(43 * 7)"],
-            outputs: [{ text: ["301\n"] }, { data: { "text/plain": ["42"] } }],
+            outputs: [
+              { text: ["301\n"] },
+              { data: { "text/plain": ["42"] } },
+              {
+                output_type: "error",
+                ename: "ZeroDivisionError",
+                evalue: "division by zero",
+                traceback: [
+                  "\u001b[32mCell In[1], line 1\u001b[0m",
+                  "\u001b[31m----> 1 1 / 0\u001b[0m",
+                  "ZeroDivisionError: division by zero",
+                ],
+              },
+            ],
           },
         ],
       });
@@ -206,6 +219,11 @@ describe("question answer paths", () => {
       expect(NodeFS.readFileSync(`${path}.txt`, "utf8")).toContain("Vessel: Larkspur");
       expect(NodeFS.readFileSync(`${path}.txt`, "utf8")).toContain("301");
       expect(NodeFS.readFileSync(`${path}.txt`, "utf8")).toContain("42");
+      const extracted = NodeFS.readFileSync(`${path}.txt`, "utf8");
+      expect(extracted).toContain(
+        "ZeroDivisionError: division by zero\nCell In[1], line 1\n----> 1 1 / 0\nZeroDivisionError: division by zero",
+      );
+      expect(extracted).not.toContain("\u001b");
       expect(NodeFS.readFileSync(path, "utf8")).toBe(notebook);
       const before = NodeFS.statSync(path + ".txt").mtimeMs;
       // A changed binary would fail parsing if the cached extraction were not reused.
@@ -455,6 +473,15 @@ describe("question answer paths", () => {
               '<w:document xmlns:w="urn:w"><w:body><w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Report &amp; totals</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>North</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>12</w:t></w:r></w:p><w:p><w:r><w:t>34</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>Before</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Inner</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>After</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Neighbor</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>',
           },
           expected: ["## Report & totals", "North\t12 34", "Before Inner After\tNeighbor"],
+        },
+        {
+          ext: "docx",
+          bounded: true,
+          parts: {
+            "word/document.xml":
+              '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>First</w:t><w:cr/><w:t>Second</w:t><w:br/><w:t>Third</w:t></w:r></w:p></w:body></w:document>',
+          },
+          expected: ["First\nSecond\nThird"],
         },
         {
           ext: "docx",
@@ -899,6 +926,32 @@ describe("question answer paths", () => {
         notebookPath + ".txt",
       );
       expect(NodeFS.readFileSync(notebookPath + ".txt", "utf8")).toBe(notebookLimited);
+      const errorPath = NodePath.join(config.attachmentsDir, "limited-error.ipynb");
+      NodeFS.writeFileSync(
+        errorPath,
+        JSON.stringify({
+          cells: [
+            {
+              cell_type: "code",
+              source: "1 / 0",
+              outputs: [
+                {
+                  output_type: "error",
+                  ename: "ZeroDivisionError",
+                  evalue: "division by zero",
+                  traceback: ["\u001b[31m" + "trace".repeat(250_000) + "\u001b[0m", "After limit"],
+                },
+              ],
+            },
+          ],
+        }),
+      );
+      const errorLimited = yield* Effect.promise(() => extractDocumentText(errorPath, ".ipynb"));
+      expect(errorLimited).toContain("ZeroDivisionError: division by zero\ntrace");
+      expect(errorLimited.length).toBeLessThan(1_000_100);
+      expect(errorLimited.match(/\[Extracted text truncated/g)).toHaveLength(1);
+      expect(errorLimited).not.toContain("After limit");
+      expect(errorLimited).not.toContain("\u001b");
       const deepPath = NodePath.join(config.attachmentsDir, "deep.rtf");
       NodeFS.writeFileSync(
         deepPath,

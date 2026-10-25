@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- isolated CLI worker; no server runtime is loaded here.
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import * as NodeUtil from "node:util";
 import { characterEntities } from "character-entities";
 import { SaxesParser } from "saxes";
 import * as Yauzl from "yauzl";
@@ -68,7 +69,7 @@ function* all(node: XmlNode, name: string | readonly string[]): Generator<XmlNod
 function* text(node: XmlNode): Generator<string, void> {
   if (["script", "style", "binary-data"].includes(node.name)) return;
   if (["tab", "cell"].includes(node.name)) yield "\t";
-  else if (["br", "line-break"].includes(node.name)) yield "\n";
+  else if (["br", "line-break", "cr"].includes(node.name)) yield "\n";
   else if (node.spaceCount !== undefined) {
     yield " ".repeat(Math.min(MAX_OUTPUT, node.spaceCount));
     if (node.spaceCount > MAX_OUTPUT) throw new Truncation("Space repeat limit");
@@ -82,7 +83,7 @@ function* paragraphs(node: XmlNode): Generator<TextPart, void> {
   if (["script", "style", "binary-data"].includes(node.name)) return;
   for (const child of node.children) {
     if (typeof child === "string") yield child;
-    else if (["br", "line-break"].includes(child.name)) yield "\n";
+    else if (["br", "line-break", "cr"].includes(child.name)) yield "\n";
     else if (["tbl", "table"].includes(child.name)) yield* table(child);
     else if (["p", "h"].includes(child.name) || /^h[1-6]$/.test(child.name)) {
       const style = all(child, "pStyle").next().value?.attrs.val ?? "";
@@ -276,6 +277,19 @@ function* notebook(source: string): Generator<string, void> {
           "text/plain" in output.data
         )
           yield* lines(output.data["text/plain"]);
+        else if ("output_type" in output && output.output_type === "error") {
+          if ("ename" in output) yield* lines(output.ename);
+          if ("evalue" in output) {
+            yield ": ";
+            yield* lines(output.evalue);
+          }
+          yield "\n";
+          if ("traceback" in output)
+            for (const line of lines(output.traceback)) {
+              yield NodeUtil.stripVTControlCharacters(line);
+              yield "\n";
+            }
+        }
         yield "\n";
       }
     }
