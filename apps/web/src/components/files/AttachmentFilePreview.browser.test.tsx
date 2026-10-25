@@ -2235,6 +2235,112 @@ it("toggles a Mermaid attachment between diagram and source through the lazy pre
   expect(screen.container.querySelector('[role="alert"]')).toBeNull();
 });
 
+it("navigates, searches, zooms, and selects mixed-height PDF pages", async () => {
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Count 3 /Kids [3 0 R 5 0 R 7 0 R] >>",
+  ];
+  for (const [index, title] of [
+    "Quarterly outlook",
+    "Delivery milestones",
+    "Budget and risks",
+  ].entries()) {
+    const text = `/GS1 gs BT /F1 24 Tf 30 ${index === 0 ? 70 : 700} Td ${index === 0 ? "(Quarter) Tj /F2 24 Tf (ly outlook) Tj" : `(${title}) Tj`} ET`;
+    objects.push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 ${index === 0 ? 140 : 792}] /Rotate ${index === 2 ? 90 : 0} /Resources << /Font << /F1 9 0 R /F2 10 0 R >> /ExtGState << /GS1 << /TR << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 2 >> >> >> >> /Contents ${4 + index * 2} 0 R >>`,
+      `<< /Length ${text.length} >>\nstream\n${text}\nendstream`,
+    );
+  }
+  objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
+  let source = "%PDF-1.4\n";
+  const offsets = [0];
+  for (const [index, object] of objects.entries()) {
+    offsets.push(source.length);
+    source += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  }
+  const xref = source.length;
+  source += `xref\n0 11\n0000000000 65535 f \n${offsets
+    .slice(1)
+    .map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`)
+    .join("")}trailer\n<< /Size 11 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  const file = new Blob([source], { type: "application/pdf" });
+  const { default: PdfViewer } = await import("./PdfViewer");
+  const url = URL.createObjectURL(file);
+  try {
+    await using screen = await render(
+      <div style={{ display: "flex", height: 600, width: 320 }}>
+        <PdfViewer src={url} title="Planning PDF" />
+      </div>,
+    );
+    await vi.waitFor(() => expect(screen.container.textContent).toContain("1 / 3 pages"), {
+      timeout: 15_000,
+    });
+    const region = screen.container.querySelector<HTMLElement>('[role="region"]')!;
+    await vi.waitFor(() => {
+      expect(region.scrollWidth).toBe(region.clientWidth);
+      expect(region.querySelector("canvas")!.getBoundingClientRect().width).toBeLessThan(
+        region.clientWidth,
+      );
+      expect(screen.container.textContent).toContain("Fit width");
+    });
+    await act(() => {
+      (screen.container.firstElementChild as HTMLElement).style.width = "500px";
+    });
+    await vi.waitFor(() =>
+      expect(region.querySelector("canvas")!.getBoundingClientRect().width).toBe(468),
+    );
+    await screen.getByRole("button", { name: "Next page", exact: true }).click();
+    await vi.waitFor(() => expect(screen.container.textContent).toContain("2 / 3 pages"));
+    await screen.getByRole("button", { name: "Previous page", exact: true }).click();
+    await vi.waitFor(() => expect(screen.container.textContent).toContain("1 / 3 pages"));
+    await screen.getByRole("button", { name: "Zoom in", exact: true }).click();
+    await vi.waitFor(() => expect(region.scrollWidth).toBeGreaterThan(region.clientWidth));
+    await screen.getByRole("button", { name: "Fit width", exact: true }).click();
+    await vi.waitFor(() => expect(region.scrollWidth).toBe(region.clientWidth));
+    await screen.getByRole("searchbox", { name: "Find in PDF" }).fill("Quarterly outlook");
+    await vi.waitFor(() => {
+      expect(screen.container.querySelector('[role="status"]')?.textContent).toBe("1/1");
+      expect(
+        Array.from(region.querySelectorAll(".pdf-find-match")).map((span) => span.textContent),
+      ).toEqual(["Quarter", "ly outlook"]);
+    });
+    await screen.getByRole("searchbox", { name: "Find in PDF" }).fill("Budget");
+    await vi.waitFor(() => expect(screen.container.textContent).toContain("3 / 3 pages"));
+    await screen.getByRole("button", { name: "Zoom in", exact: true }).click();
+    await vi.waitFor(() => expect(screen.container.textContent).toContain("3 / 3 pages"));
+    await vi.waitFor(() => {
+      const span = Array.from(screen.container.querySelectorAll("[data-pdf-text-layer] span")).find(
+        (node) => node.textContent === "Budget and risks",
+      );
+      expect(span).toBeDefined();
+      const textBounds = span!.getBoundingClientRect();
+      const pageBounds = span!.parentElement!.getBoundingClientRect();
+      expect(textBounds.width).toBeGreaterThan(0);
+      expect(textBounds.height).toBeGreaterThan(0);
+      expect(textBounds.left).toBeGreaterThanOrEqual(pageBounds.left - 1);
+      expect(textBounds.top).toBeGreaterThanOrEqual(pageBounds.top - 1);
+      expect(textBounds.right).toBeLessThanOrEqual(pageBounds.right + 1);
+      expect(textBounds.bottom).toBeLessThanOrEqual(pageBounds.bottom + 1);
+      const range = document.createRange();
+      range.selectNodeContents(span!);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      expect(selection.toString()).toBe("Budget and risks");
+      expect(getComputedStyle(span!).userSelect).toBe("text");
+      selection.removeAllRanges();
+    });
+    await screen.getByRole("button", { name: "Fit width", exact: true }).click();
+    await vi.waitFor(() => expect(screen.container.textContent).toContain("3 / 3 pages"));
+    await screen.getByRole("searchbox", { name: "Find in PDF" }).fill(" ");
+    await vi.waitFor(() =>
+      expect(screen.container.querySelector('[role="status"]')?.textContent).toBe("0/0"),
+    );
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+});
 it("mounts a bounded set of saved notebook outputs as the reader scrolls", async () => {
   const notebook = {
     nbformat: 4,
