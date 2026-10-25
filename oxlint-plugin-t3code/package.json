@@ -2,6 +2,9 @@
   "name": "@t3tools/oxlint-plugin-t3code",
   "private": true,
   "type": "module",
+  "exports": {
+    "./react-effect-budget": "./rules/react-effect-budget.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vp test run --config ../vite.config.ts --dir ."

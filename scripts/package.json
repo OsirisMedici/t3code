@@ -19,9 +19,11 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@t3tools/oxlint-plugin-t3code": "workspace:*",
     "@types/plist": "catalog:",
     "@types/pngjs": "6.0.5",
     "esbuild": "0.28.2",
+    "oxc-parser": "0.148.0",
     "typescript": "catalog:",
     "typescript-legacy": "npm:typescript@~6.0.3",
     "vite-plus": "catalog:"

@@ -59,7 +59,9 @@ interface RuleHarness {
 
 interface RuleHarnessOptions {
   readonly filename?: string;
-  readonly ruleOptions?: ReadonlyArray<unknown>;
+  readonly ruleOptions?: ReadonlyArray<unknown> | ((fixtureDir: string) => ReadonlyArray<unknown>);
+  /** Extra files written into the fixture directory, keyed by relative path. */
+  readonly files?: Readonly<Record<string, string>>;
 }
 
 const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> =>
@@ -110,11 +112,24 @@ export const createOxlintRuleHarness = (
       configPath,
       yield* encodeOxlintConfig({
         jsPlugins: [{ name: "t3code", specifier: pluginPath }],
-        rules: { [ruleName]: ["error", ...(options.ruleOptions ?? [])] },
+        rules: {
+          [ruleName]: [
+            "error",
+            ...(typeof options.ruleOptions === "function"
+              ? options.ruleOptions(fixtureDir)
+              : (options.ruleOptions ?? [])),
+          ],
+        },
       }),
     );
-    yield* fs.makeDirectory(path.dirname(sourcePath), { recursive: true });
-    yield* fs.writeFileString(sourcePath, source);
+    for (const [file, contents] of [
+      ...Object.entries(options.files ?? {}),
+      [path.relative(fixtureDir, sourcePath), source] as const,
+    ]) {
+      const filePath = path.join(fixtureDir, file);
+      yield* fs.makeDirectory(path.dirname(filePath), { recursive: true });
+      yield* fs.writeFileString(filePath, contents);
+    }
 
     // Run through the current Node binary: oxlint's bin is an extensionless
     // shebang script, which Windows cannot spawn directly and which would
