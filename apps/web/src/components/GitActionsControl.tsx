@@ -1159,6 +1159,7 @@ export default function GitActionsControl({
     isPanel &&
     draftId !== undefined &&
     gitActionProgress === null &&
+    !gitStatusError &&
     quickAction.disabled &&
     !changesTotals?.insertions &&
     !changesTotals?.deletions;

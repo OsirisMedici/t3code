@@ -1669,10 +1669,12 @@ body {
   --secondary-label: #8f8f8f;
 }
 
-/* Lighter default icon stroke. Zero specificity, so stroke-* classes still win
-   over it while it still beats lucide's stroke-width="2" attribute. */
-:where(svg.lucide[stroke-width="2"]) {
-  stroke-width: 1.75;
+/* Lighter default icon stroke. In the base layer so stroke-* utilities still win; any
+   CSS beats lucide's stroke-width="2" attribute. */
+@layer base {
+  :where(svg.lucide[stroke-width="2"]) {
+    stroke-width: 1.75;
+  }
 }
 
 html,
