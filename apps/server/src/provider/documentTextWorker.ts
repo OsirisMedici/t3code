@@ -281,7 +281,7 @@ function* rtf(source: string): Generator<string, void> {
   const stack: Array<typeof state> = [];
   const symbols = new Map([
     ["endash", "–"],
-    ["emdash", "—"],
+    ["emdash", characterEntities.mdash],
     ["enspace", "\u2002"],
     ["emspace", "\u2003"],
     ["qmspace", "\u2005"],
