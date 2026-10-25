@@ -2616,13 +2616,15 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
   );
 
   it.effect.each([
-    [false, "image"],
-    [true, "image"],
-    [false, "text"],
-    [true, "text"],
+    [false, "image", false],
+    [true, "image", false],
+    [false, "text", false],
+    [true, "text", false],
+    [true, "image", true],
+    [true, "text", true],
   ] as const)(
-    "rejects a steer stopped during attachment resolution (held end: %s, lookup: %s)",
-    ([heldEnd, lookup]) =>
+    "rejects a steer stopped during attachment resolution (held end: %s, lookup: %s, cancel: %s)",
+    ([heldEnd, lookup, cancel]) =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
@@ -2660,12 +2662,18 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
                   }),
                 ]
               : []),
-            out("session.interrupt", { sessionID: SESSION }),
-            ...(heldEnd
-              ? [event("session.usage.updated", { sessionID: SESSION }, "interrupt-reply")]
-              : []),
-            reply("session.interrupt", { interrupted: !heldEnd }),
-            ...(heldEnd ? [] : [event("session.execution.interrupted", { sessionID: SESSION })]),
+            ...(cancel
+              ? []
+              : [
+                  out("session.interrupt", { sessionID: SESSION }),
+                  ...(heldEnd
+                    ? [event("session.usage.updated", { sessionID: SESSION }, "interrupt-reply")]
+                    : []),
+                  reply("session.interrupt", { interrupted: !heldEnd }),
+                  ...(heldEnd
+                    ? []
+                    : [event("session.execution.interrupted", { sessionID: SESSION })]),
+                ]),
             out("session.prompt", { sessionID: SESSION, text: "<any>" }),
             promptAccepted,
             event("session.execution.started", { sessionID: SESSION }),
@@ -2737,31 +2745,42 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
           gate.release("execution-end");
           yield* Deferred.await(executionEnded);
         }
-        const interrupt = yield* runtime
-          .interruptTurn({
-            providerThread: thread,
-            providerTurnId: yield* providerTurnId,
-          })
-          .pipe(Effect.forkScoped);
-        if (heldEnd) {
+        if (cancel) {
+          yield* Fiber.interrupt(steer);
+        }
+        const interrupt = cancel
+          ? undefined
+          : yield* runtime
+              .interruptTurn({
+                providerThread: thread,
+                providerTurnId: yield* providerTurnId,
+              })
+              .pipe(Effect.forkScoped);
+        if (!cancel && heldEnd) {
           assert.isTrue(yield* Effect.promise(() => gate.waitForReached("interrupt-reply")));
-        } else {
+        } else if (!cancel) {
           yield* Deferred.await(stopped);
         }
         yield* Deferred.succeed(release, undefined);
-        const result = yield* Fiber.join(steer);
         assert.lengthOf(prompts, 1);
-        assert.isTrue(Exit.isFailure(result));
-        if (Exit.isFailure(result)) {
-          assert.deepInclude(Cause.squash(result.cause), { _tag: "ProviderAdapterProtocolError" });
+        if (cancel) {
+          assert.isTrue(Exit.isFailure(yield* Fiber.await(steer)));
+        } else {
+          const result = yield* Fiber.join(steer);
+          assert.isTrue(Exit.isFailure(result));
+          if (Exit.isFailure(result)) {
+            assert.deepInclude(Cause.squash(result.cause), {
+              _tag: "ProviderAdapterProtocolError",
+            });
+          }
         }
         yield* Deferred.await(stopped);
         gate.release("interrupt-reply");
-        yield* Fiber.join(interrupt);
+        if (interrupt) yield* Fiber.join(interrupt);
         yield* runtime.startTurn(secondTurn(thread));
         yield* Deferred.await(completed);
         assert.lengthOf(prompts, 2);
-        assert.deepEqual(terminals, ["interrupted", "completed"]);
+        assert.deepEqual(terminals, [cancel ? "completed" : "interrupted", "completed"]);
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

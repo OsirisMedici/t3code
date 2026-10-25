@@ -3646,13 +3646,26 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (turn.settledInbox.has(inboxID)) return;
           turn.steers.add(inboxID);
           state.strandedSteers.delete(inboxID);
-          const files = yield* promptFiles(steerInput.message.attachments);
-          const messageText = (yield* providerMessageTextWithAttachmentPaths({
-            text: steerInput.message.text,
-            attachments: steerInput.message.attachments,
-            resolveAttachmentPath: host.resolveAttachmentPath,
-            resolveExtractedTextPath: host.resolveExtractedTextPath,
-          })).trim();
+          const { files, messageText } = yield* Effect.gen(function* () {
+            const files = yield* promptFiles(steerInput.message.attachments);
+            const messageText = (yield* providerMessageTextWithAttachmentPaths({
+              text: steerInput.message.text,
+              attachments: steerInput.message.attachments,
+              resolveAttachmentPath: host.resolveAttachmentPath,
+              resolveExtractedTextPath: host.resolveExtractedTextPath,
+            })).trim();
+            return { files, messageText };
+          }).pipe(
+            Effect.onInterrupt(() =>
+              lock.withPermit(
+                Effect.gen(function* () {
+                  turn.steers.delete(inboxID);
+                  state.strandedSteers.delete(inboxID);
+                  if (state.active === turn) yield* endIfSettled(state, turn);
+                }),
+              ),
+            ),
+          );
           if (state.active !== turn || turn.interrupted) {
             yield* lock.withPermit(
               Effect.gen(function* () {

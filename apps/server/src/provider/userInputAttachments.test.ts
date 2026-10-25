@@ -35,47 +35,55 @@ const attachment = {
   sizeBytes: 4,
 };
 describe("question answer paths", () => {
-  it.effect("keeps unrelated files and cached text available during document extraction", () =>
-    Effect.gen(function* () {
-      const config = yield* ServerConfig.ServerConfig;
-      const fs = yield* FileSystem.FileSystem;
-      const path = NodePath.join(config.attachmentsDir, "blocked.rtf");
-      const cached = NodePath.join(config.attachmentsDir, "cached.rtf");
-      NodeFS.writeFileSync(path, String.raw`{\rtf1 Available}`);
-      NodeFS.writeFileSync(cached + ".txt", "Cached text");
-      const started = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      let reads = 0;
-      yield* Effect.gen(function* () {
-        const documents = yield* DocumentText.DocumentText;
-        const extraction = yield* documents.ensure(path).pipe(Effect.forkChild);
-        yield* Deferred.await(started);
-        const duplicate = yield* documents.ensure(path).pipe(Effect.forkChild);
-        expect(yield* documents.ensure(path + ".png")).toBeUndefined();
-        expect(yield* documents.ensure(path + ".pdf")).toBeUndefined();
-        expect(yield* documents.ensure(cached)).toBe(cached + ".txt");
-        expect(NodeFS.readFileSync(cached + ".txt", "utf8")).toBe("Cached text");
-        yield* Deferred.succeed(release, undefined);
-        expect(yield* Fiber.join(extraction)).toBe(path + ".txt");
-        expect(yield* Fiber.join(duplicate)).toBe(path + ".txt");
-        expect(reads).toBe(1);
-        expect(NodeFS.readFileSync(path + ".txt", "utf8")).toBe("Available");
-      }).pipe(
-        Effect.provide(Layer.fresh(DocumentText.layer)),
-        Effect.provideService(FileSystem.FileSystem, {
-          ...fs,
-          stat: (file) =>
-            file === path
-              ? Effect.gen(function* () {
-                  reads++;
-                  yield* Deferred.succeed(started, undefined);
-                  yield* Deferred.await(release);
-                  return yield* fs.stat(file);
-                })
-              : fs.stat(file),
-        }),
-      );
-    }).pipe(Effect.provide(layer)),
+  it.effect.each([false, true])(
+    "keeps unrelated files available during extraction (failure: %s)",
+    (failure) =>
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const path = NodePath.join(config.attachmentsDir, "blocked.rtf");
+        const cached = NodePath.join(config.attachmentsDir, "cached.rtf");
+        NodeFS.writeFileSync(path, failure ? "invalid document" : String.raw`{\rtf1 Available}`);
+        NodeFS.writeFileSync(cached + ".txt", "Cached text");
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let reads = 0;
+        yield* Effect.gen(function* () {
+          const documents = yield* DocumentText.DocumentText;
+          const extraction = yield* documents.ensure(path).pipe(Effect.forkChild);
+          yield* Deferred.await(started);
+          const duplicate = yield* documents.ensure(path).pipe(Effect.forkChild);
+          expect(yield* documents.ensure(path + ".png")).toBeUndefined();
+          expect(yield* documents.ensure(path + ".pdf")).toBeUndefined();
+          expect(yield* documents.ensure(cached)).toBe(cached + ".txt");
+          expect(NodeFS.readFileSync(cached + ".txt", "utf8")).toBe("Cached text");
+          yield* Deferred.succeed(release, undefined);
+          const expected = failure ? undefined : path + ".txt";
+          expect(yield* Fiber.join(extraction)).toBe(expected);
+          expect(yield* Fiber.join(duplicate)).toBe(expected);
+          expect(yield* documents.ensure(path)).toBe(expected);
+          expect(reads).toBe(1);
+          if (failure) {
+            NodeFS.writeFileSync(path + ".txt", "Recovered text");
+            expect(yield* documents.ensure(path)).toBe(path + ".txt");
+            expect(NodeFS.readFileSync(path + ".txt", "utf8")).toBe("Recovered text");
+          } else expect(NodeFS.readFileSync(path + ".txt", "utf8")).toBe("Available");
+        }).pipe(
+          Effect.provide(Layer.fresh(DocumentText.layer)),
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            stat: (file) =>
+              file === path
+                ? Effect.gen(function* () {
+                    reads++;
+                    yield* Deferred.succeed(started, undefined);
+                    yield* Deferred.await(release);
+                    return yield* fs.stat(file);
+                  })
+                : fs.stat(file),
+          }),
+        );
+      }).pipe(Effect.provide(layer)),
   );
 
   it.effect.each([
@@ -345,6 +353,45 @@ describe("question answer paths", () => {
           expected: ["Present"],
           absent: ["[Extracted text truncated"],
         },
+        {
+          ext: "epub",
+          parts: {
+            "META-INF/container.xml": '<container><rootfile full-path="book.opf"/></container>',
+            "book.opf":
+              '<package><item id="bad" href="ch%ZZ.xhtml"/><item id="good" href="good.svg"/><itemref idref="bad"/><itemref idref="good"/></package>',
+            "good.svg":
+              '<svg xmlns="http://www.w3.org/2000/svg"><text>Readable SVG chapter</text></svg>',
+          },
+          expected: [
+            "Readable SVG chapter",
+            "[Skipped document part: chapter 1 (missing or invalid XML).]",
+          ],
+          absent: ["[Extracted text truncated"],
+        },
+        ...[false, true].flatMap((bom) =>
+          [false, true].map((bigEndian) => {
+            const encode = (source: string) => {
+              const data = Buffer.from(`${bom ? "\ufeff" : ""}${source}`, "utf16le");
+              return bigEndian ? data.swap16() : data;
+            };
+            return {
+              ext: "epub",
+              parts: {
+                "META-INF/container.xml": encode(
+                  '<?xml version="1.0" encoding="UTF-16"?><container><rootfile full-path="book.opf"/></container>',
+                ),
+                "book.opf": encode(
+                  '<?xml version="1.0" encoding="UTF-16"?><package><item id="a" href="a.xhtml"/><itemref idref="a"/></package>',
+                ),
+                "a.xhtml": encode(
+                  '<?xml version="1.0" encoding="UTF-16"?><html><p>UTF-16 chapter: café 日本語</p></html>',
+                ),
+              },
+              expected: ["UTF-16 chapter: café 日本語"],
+              absent: ["[Skipped document part", "[Extracted text truncated"],
+            };
+          }),
+        ),
         {
           ext: "epub",
           bounded: true,

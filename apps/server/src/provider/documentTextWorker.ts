@@ -205,7 +205,7 @@ async function archive(path: string): Promise<Map<string, string>> {
           reject(new Truncation("Expanded byte limit"));
           return;
         }
-        if (!/\.(xml|rels|xhtml|html|htm|opf)$/i.test(entry.fileName)) {
+        if (!/\.(xml|rels|xhtml|html|htm|opf|svg)$/i.test(entry.fileName)) {
           zip.readEntry();
           return;
         }
@@ -226,7 +226,15 @@ async function archive(path: string): Promise<Map<string, string>> {
             buffers.push(chunk);
           });
           stream.on("end", () => {
-            files.set(entry.fileName, Buffer.concat(buffers).toString("utf8"));
+            const data = Buffer.concat(buffers);
+            // XML's BOM and initial '<' bytes distinguish both UTF-16 byte orders.
+            const encoding =
+              (data[0] === 0xff && data[1] === 0xfe) || (data[0] === 0x3c && data[1] === 0)
+                ? "utf-16le"
+                : (data[0] === 0xfe && data[1] === 0xff) || (data[0] === 0 && data[1] === 0x3c)
+                  ? "utf-16be"
+                  : "utf-8";
+            files.set(entry.fileName, new TextDecoder(encoding).decode(data));
             zip.readEntry();
           });
         });
@@ -557,11 +565,15 @@ async function* document(path: string, extension: string): AsyncGenerator<TextPa
           skip(`chapter ${index}`);
           continue;
         }
+        let decoded: string;
+        try {
+          decoded = decodeURIComponent(href.split("#")[0]!);
+        } catch {
+          skip(`chapter ${index}`);
+          continue;
+        }
         const name = NodePath.posix.normalize(
-          NodePath.posix.join(
-            NodePath.posix.dirname(rootfile),
-            decodeURIComponent(href.split("#")[0]!),
-          ),
+          NodePath.posix.join(NodePath.posix.dirname(rootfile), decoded),
         );
         yield* paragraphs(read(name));
       }

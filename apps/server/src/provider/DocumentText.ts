@@ -11,6 +11,17 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 
 const extensions = new Set(["docx", "xlsx", "pptx", "odt", "ods", "odp", "rtf", "epub", "ipynb"]);
 
+class DocumentTextError extends Schema.TaggedError<DocumentTextError>()("DocumentTextError", {
+  operation: Schema.Literal("extract"),
+  path: Schema.String,
+  extension: Schema.String,
+  cause: Schema.Defect(),
+}) {
+  override get message(): string {
+    return `Failed to ${this.operation} ${this.extension} document text.`;
+  }
+}
+
 export const resolveExtractedTextPath = Effect.fn("DocumentText.resolveExtractedTextPath")(
   function* (path: string) {
     const extension = path.split(".").at(-1)?.toLowerCase();
@@ -22,10 +33,6 @@ export const resolveExtractedTextPath = Effect.fn("DocumentText.resolveExtracted
     );
   },
 );
-
-class DocumentTextError extends Schema.TaggedError<DocumentTextError>()("DocumentTextError", {
-  cause: Schema.Defect(),
-}) {}
 
 export class DocumentText extends Context.Service<
   DocumentText,
@@ -40,6 +47,7 @@ const make = Effect.gen(function* () {
   const isExecutable = yield* HostProcess.IsExecutable;
   const environment = yield* HostProcess.Environment;
   const lock = yield* Semaphore.make(1);
+  const failed = new Set<string>();
   // In a bundle import.meta.url is bin.mjs; development and tests use this source module.
   const entry = NodeURL.fileURLToPath(
     new URL(import.meta.url.endsWith(".ts") ? "../bin.ts" : "./bin.mjs", import.meta.url),
@@ -47,6 +55,7 @@ const make = Effect.gen(function* () {
   const extract = Effect.fn("DocumentText.extract")(function* (path: string, extension: string) {
     const sidecar = `${path}.txt`;
     if (yield* fs.exists(sidecar)) return sidecar;
+    if (failed.has(path)) return;
     const info = yield* fs.stat(path);
     if (Number(info.size) > 16 * 1024 * 1024) return;
     const content = yield* Effect.tryPromise({
@@ -70,8 +79,14 @@ const make = Effect.gen(function* () {
             (error, stdout) => (error ? reject(error) : resolve(stdout)),
           );
         }),
-      catch: (cause) => new DocumentTextError({ cause }),
-    });
+      catch: (cause) => new DocumentTextError({ operation: "extract", path, extension, cause }),
+    }).pipe(
+      Effect.tapError(() => {
+        if (failed.size >= 1024) failed.delete(failed.values().next().value!);
+        failed.add(path);
+        return Effect.logWarning("Document text extraction failed.", { extension });
+      }),
+    );
     const pending = `${sidecar}.part`;
     yield* fs
       .writeFileString(pending, content)
