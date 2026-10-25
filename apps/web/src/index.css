@@ -4,7 +4,8 @@
 @custom-variant light (&:not(.dark, .dark *));
 /* Window Controls Overlay: active when Electron exposes native titlebar control geometry. */
 @custom-variant wco (&:is(.wco, .wco *));
-/* Beta "New design" (Settings -> Beta) sets data-redesign on <html>. */
+/* Beta "New design" (Settings -> Beta) sets data-redesign on <html>. The variant adds no
+   specificity, so it loses to dark:, hover: and other variants on the same property. */
 @custom-variant redesign (&:where([data-redesign] *));
 
 /* Secondary hovering pointers reveal sidebar actions on touch-primary devices. */
