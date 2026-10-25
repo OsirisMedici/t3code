@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import "~/index.css";
 
-import { act, render } from "../../../test/render";
+import { act, fakeTimers, render } from "../../../test/render";
 import { MessagesTimeline } from "./MessagesTimeline";
 import { makeStreamingTimelineFixture } from "../../test-fixtures";
 import { deriveTimelineEntriesFromVisibleTurnItems } from "../../session-logic";
@@ -223,6 +223,47 @@ describe("MessagesTimeline messages", () => {
     await expectHeadingInView("First turn", "Turn 1:");
     expect(headingFor("Last turn")).toBeDefined();
     await expectHeadingInView("Last turn", "Turn 118:");
+  });
+
+  it("keeps rows in item order after a reload or thread switch, before any timer runs", async () => {
+    setup();
+    // NVDA's browse mode keeps the first DOM order it reads, so a timer that sorts rows later is too late.
+    using _timers = fakeTimers();
+    const thread = (name: string) =>
+      Array.from({ length: 120 }, (_, index) =>
+        message(
+          `${name} turn ${index}:\n\n${"x ".repeat(200)}`,
+          { role: index % 2 === 0 ? "user" : "assistant" },
+          `${name}-${index}`,
+        ),
+      );
+    const props = baseProps();
+    await using screen = await renderElement(
+      <MessagesTimeline {...props} timelineEntries={thread("A")} />,
+    );
+    const turnsInDomOrder = () =>
+      [...screen.container.querySelectorAll("h3")].map((heading) =>
+        Number(/turn (\d+):/.exec(heading.parentElement?.textContent ?? "")?.[1]),
+      );
+    const expectItemOrder = () => {
+      const turns = turnsInDomOrder();
+      expect(turns).toEqual(turns.toSorted((a, b) => a - b));
+    };
+
+    await vi.waitFor(() => expect(screen.text()).toContain("A turn 118:"));
+    expect(turnsInDomOrder()).toContain(0);
+    expectItemOrder();
+
+    await screen.rerender(
+      <MessagesTimeline
+        {...props}
+        routeThreadKey={`${props.routeThreadKey}-other`}
+        timelineEntries={thread("B")}
+      />,
+    );
+    await vi.waitFor(() => expect(screen.text()).toContain("B turn 118:"));
+    expect(screen.text()).not.toContain("A turn");
+    expectItemOrder();
   });
 
   it("preserves XML-like tags and comparisons in user messages as text", async () => {
