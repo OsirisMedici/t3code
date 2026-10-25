@@ -9,6 +9,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vite-plus/test";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as ServerConfig from "../config.ts";
@@ -89,13 +90,12 @@ describe("question answer paths", () => {
   it.effect("retries unchanged documents after a transient worker failure expires", () =>
     Effect.acquireUseRelease(
       Effect.sync(() => {
-        const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
         const worker = vi.spyOn(NodeChildProcess, "execFile").mockImplementationOnce(() => {
           throw Object.assign(new Error("spawn EAGAIN"), { code: "EAGAIN" });
         });
-        return { clock, worker };
+        return worker;
       }),
-      ({ clock, worker }) =>
+      (worker) =>
         Effect.gen(function* () {
           const config = yield* ServerConfig.ServerConfig;
           const path = NodePath.join(config.attachmentsDir, "retry.rtf");
@@ -105,18 +105,14 @@ describe("question answer paths", () => {
           expect(yield* documents.ensure(path)).toBeUndefined();
           expect(worker).toHaveBeenCalledTimes(1);
           expect(NodeFS.existsSync(path + ".txt")).toBe(false);
-          clock.mockReturnValue(2_000);
+          yield* TestClock.adjust("1 second");
           expect(yield* documents.ensure(path)).toBe(path + ".txt");
           expect(NodeFS.readFileSync(path + ".txt", "utf8")).toBe("Available");
           expect(worker).toHaveBeenCalledTimes(2);
           expect(yield* documents.ensure(path)).toBe(path + ".txt");
           expect(worker).toHaveBeenCalledTimes(2);
         }).pipe(Effect.provide(layer)),
-      ({ clock, worker }) =>
-        Effect.sync(() => {
-          clock.mockRestore();
-          worker.mockRestore();
-        }),
+      (worker) => Effect.sync(() => worker.mockRestore()),
     ),
   );
 
