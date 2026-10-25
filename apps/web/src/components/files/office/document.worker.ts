@@ -1,5 +1,5 @@
 // Adapted from opencode (MIT). Copyright (c) 2025 opencode. See LICENSE.opencode.
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 import {
   buildResidentRegionLayoutRequest,
   getLayoutKernelInputs,
