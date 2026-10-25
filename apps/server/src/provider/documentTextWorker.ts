@@ -188,12 +188,7 @@ async function archive(path: string): Promise<Map<string, string>> {
       zip.on("error", reject);
       zip.on("end", resolve);
       zip.on("entry", (entry: Yauzl.Entry) => {
-        if (
-          ++count > 2048 ||
-          zip.entryCount > 2048 ||
-          entry.uncompressedSize > MAX_EXPANDED ||
-          entry.uncompressedSize > Math.max(1024, entry.compressedSize * 200)
-        ) {
+        if (++count > 2048 || zip.entryCount > 2048) {
           reject(new Truncation("Archive limit"));
           return;
         }
@@ -201,13 +196,20 @@ async function archive(path: string): Promise<Map<string, string>> {
           reject(new Error("Encrypted archive"));
           return;
         }
+        if (!/\.(xml|rels|xhtml|html|htm|opf|svg)$/i.test(entry.fileName)) {
+          zip.readEntry();
+          return;
+        }
+        if (
+          entry.uncompressedSize > MAX_EXPANDED ||
+          entry.uncompressedSize > Math.max(1024, entry.compressedSize * 200)
+        ) {
+          reject(new Truncation("Archive limit"));
+          return;
+        }
         expanded += entry.uncompressedSize;
         if (expanded > MAX_EXPANDED) {
           reject(new Truncation("Expanded byte limit"));
-          return;
-        }
-        if (!/\.(xml|rels|xhtml|html|htm|opf|svg)$/i.test(entry.fileName)) {
-          zip.readEntry();
           return;
         }
         zip.openReadStream(entry, (error, stream) => {

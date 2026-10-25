@@ -47,7 +47,7 @@ const make = Effect.gen(function* () {
   const isExecutable = yield* HostProcess.IsExecutable;
   const environment = yield* HostProcess.Environment;
   const lock = yield* Semaphore.make(1);
-  const failed = new Set<string>();
+  const failed = new Map<string, number>();
   // In a bundle import.meta.url is bin.mjs; development and tests use this source module.
   const entry = NodeURL.fileURLToPath(
     new URL(import.meta.url.endsWith(".ts") ? "../bin.ts" : "./bin.mjs", import.meta.url),
@@ -55,7 +55,7 @@ const make = Effect.gen(function* () {
   const extract = Effect.fn("DocumentText.extract")(function* (path: string, extension: string) {
     const sidecar = `${path}.txt`;
     if (yield* fs.exists(sidecar)) return sidecar;
-    if (failed.has(path)) return;
+    if ((failed.get(path) ?? 0) > Date.now()) return;
     const info = yield* fs.stat(path);
     if (Number(info.size) > 16 * 1024 * 1024) return;
     const content = yield* Effect.tryPromise({
@@ -82,8 +82,9 @@ const make = Effect.gen(function* () {
       catch: (cause) => new DocumentTextError({ operation: "extract", path, extension, cause }),
     }).pipe(
       Effect.tapError(() => {
-        if (failed.size >= 1024) failed.delete(failed.values().next().value!);
-        failed.add(path);
+        if (failed.size >= 1024) failed.delete(failed.keys().next().value!);
+        // Worker errors include transient spawn, I/O and process failures.
+        failed.set(path, Date.now() + 1_000);
         return Effect.logWarning("Document text extraction failed.", { extension });
       }),
     );

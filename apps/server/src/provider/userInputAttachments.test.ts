@@ -86,6 +86,40 @@ describe("question answer paths", () => {
       }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("retries unchanged documents after a transient worker failure expires", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+        const worker = vi.spyOn(NodeChildProcess, "execFile").mockImplementationOnce(() => {
+          throw Object.assign(new Error("spawn EAGAIN"), { code: "EAGAIN" });
+        });
+        return { clock, worker };
+      }),
+      ({ clock, worker }) =>
+        Effect.gen(function* () {
+          const config = yield* ServerConfig.ServerConfig;
+          const path = NodePath.join(config.attachmentsDir, "retry.rtf");
+          NodeFS.writeFileSync(path, String.raw`{\rtf1 Available}`);
+          const documents = yield* DocumentText.DocumentText;
+          expect(yield* documents.ensure(path)).toBeUndefined();
+          expect(yield* documents.ensure(path)).toBeUndefined();
+          expect(worker).toHaveBeenCalledTimes(1);
+          expect(NodeFS.existsSync(path + ".txt")).toBe(false);
+          clock.mockReturnValue(2_000);
+          expect(yield* documents.ensure(path)).toBe(path + ".txt");
+          expect(NodeFS.readFileSync(path + ".txt", "utf8")).toBe("Available");
+          expect(worker).toHaveBeenCalledTimes(2);
+          expect(yield* documents.ensure(path)).toBe(path + ".txt");
+          expect(worker).toHaveBeenCalledTimes(2);
+        }).pipe(Effect.provide(layer)),
+      ({ clock, worker }) =>
+        Effect.sync(() => {
+          clock.mockRestore();
+          worker.mockRestore();
+        }),
+    ),
+  );
+
   it.effect.each([
     [
       "text symbols",
@@ -288,6 +322,17 @@ describe("question answer paths", () => {
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const cases = [
+        {
+          ext: "docx",
+          bounded: true,
+          parts: {
+            "word/document.xml": "<document><p>Readable despite embedded media</p></document>",
+            "word/media/black.bmp": "\0".repeat(64 * 1024),
+            "word/embeddings/unused.bin": "\0".repeat(33 * 1024 * 1024),
+          },
+          expected: ["Readable despite embedded media"],
+          absent: ["[Extracted text truncated"],
+        },
         ...[false, true].map((deep) => ({
           ext: "docx",
           bounded: true,
@@ -809,26 +854,29 @@ describe("question answer paths", () => {
         let offset = 0;
         for (const [name, content] of Object.entries(item.parts)) {
           const data = Buffer.from(content!);
+          const compressed = /\.(bmp|bin)$/.test(name) ? NodeZlib.deflateRawSync(data) : data;
           const filename = Buffer.from(name);
           const header = Buffer.alloc(30);
           header.writeUInt32LE(0x04034b50);
           header.writeUInt16LE(20, 4);
+          header.writeUInt16LE(compressed === data ? 0 : 8, 8);
           header.writeUInt32LE(NodeZlib.crc32(data), 14);
-          header.writeUInt32LE(data.length, 18);
+          header.writeUInt32LE(compressed.length, 18);
           header.writeUInt32LE(data.length, 22);
           header.writeUInt16LE(filename.length, 26);
           const directory = Buffer.alloc(46);
           directory.writeUInt32LE(0x02014b50);
           directory.writeUInt16LE(20, 4);
           directory.writeUInt16LE(20, 6);
+          directory.writeUInt16LE(compressed === data ? 0 : 8, 10);
           directory.writeUInt32LE(NodeZlib.crc32(data), 16);
-          directory.writeUInt32LE(data.length, 20);
+          directory.writeUInt32LE(compressed.length, 20);
           directory.writeUInt32LE(data.length, 24);
           directory.writeUInt16LE(filename.length, 28);
           directory.writeUInt32LE(offset, 42);
-          local.push(header, filename, data);
+          local.push(header, filename, compressed);
           central.push(directory, filename);
-          offset += header.length + filename.length + data.length;
+          offset += header.length + filename.length + compressed.length;
         }
         const end = Buffer.alloc(22);
         end.writeUInt32LE(0x06054b50);
