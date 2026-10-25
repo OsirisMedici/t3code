@@ -1,5 +1,6 @@
 // Adapted from opencode (MIT). Copyright (c) 2025 opencode. See LICENSE.opencode.
-import { Option, Schema } from "effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { inspectPresentation, type DeckSnapshot } from "@betteroffice/pptx";
 
 /** A text style a deck draws with. */
