@@ -1665,8 +1665,10 @@ body {
 }
 
 /* New design: sidebar row metadata sits a step below read titles (75% white). */
-.dark[data-redesign] [data-app-sidebar] {
-  --secondary-label: #8f8f8f;
+[data-redesign] [data-app-sidebar] {
+  @variant dark {
+    --secondary-label: #8f8f8f;
+  }
 }
 
 /* Lighter default icon stroke. In the base layer so stroke-* utilities still win; any
