@@ -131,7 +131,7 @@ export class PreviewBrowser extends Context.Service<
       string,
       PreviewBrowserInstallError | PreviewBrowserInstallingError | PreviewBrowserUnsupportedError
     >;
-    readonly installed: Effect.Effect<Option.Option<string>>;
+    readonly installed: Effect.Effect<Option.Option<string>, PreviewBrowserInstallError>;
   }
 >()("t3/preview/PreviewBrowser") {}
 
@@ -175,23 +175,24 @@ export const makePreviewBrowser = Effect.fn("PreviewBrowser.make")(function* (
           Effect.orElseSucceed(() => Option.none<string>()),
         )
       : Effect.succeed(Option.none<string>());
-    return PreviewBrowser.of({
-      installed,
-      executable: installed.pipe(
-        Effect.flatMap(
-          Option.match({
-            onSome: Effect.succeed,
-            onNone: () =>
-              Effect.fail(
-                new PreviewBrowserInstallError({
-                  detail:
-                    "T3CODE_SERVER_BROWSER_EXECUTABLE must be an absolute path to an executable file.",
-                }),
-              ),
-          }),
-        ),
-        Effect.withSpan("PreviewBrowser.executable"),
+    const executable = installed.pipe(
+      Effect.flatMap(
+        Option.match({
+          onSome: Effect.succeed,
+          onNone: () =>
+            Effect.fail(
+              new PreviewBrowserInstallError({
+                detail:
+                  "T3CODE_SERVER_BROWSER_EXECUTABLE must be an absolute path to an executable file.",
+              }),
+            ),
+        }),
       ),
+      Effect.withSpan("PreviewBrowser.executable"),
+    );
+    return PreviewBrowser.of({
+      installed: executable.pipe(Effect.map(Option.some)),
+      executable,
     });
   }
   const http = yield* HttpClient.HttpClient;

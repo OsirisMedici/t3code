@@ -165,7 +165,9 @@ it.layer(NodeServices.layer)("PreviewBrowser", (it) => {
         env: { T3CODE_SERVER_BROWSER_EXECUTABLE: configured },
       });
 
-      expect(yield* browser.installed).toEqual(Option.none());
+      const installedError = yield* browser.installed.pipe(Effect.flip);
+      expect(installedError._tag).toBe("PreviewBrowserInstallError");
+      expect(installedError.message).toContain("T3CODE_SERVER_BROWSER_EXECUTABLE");
       const error = yield* browser.executable.pipe(Effect.flip);
       expect(error._tag).toBe("PreviewBrowserInstallError");
       expect(error.message).toContain("T3CODE_SERVER_BROWSER_EXECUTABLE");

@@ -27,7 +27,7 @@ const TEST_BROWSER_ENV = "T3CODE_TEST_HEADLESS_SHELL";
 
 const layerHtmlRender = (
   executable?: string,
-  installed: Effect.Effect<Option.Option<string>> = Effect.succeed(
+  installed: PreviewBrowser.PreviewBrowser["Service"]["installed"] = Effect.succeed(
     Option.fromUndefinedOr(executable),
   ),
 ) =>
@@ -256,6 +256,27 @@ describe("HtmlRender", () => {
       yield* mcpSessions.clear(threadId);
       expect(yield* mcpSessions.takeHtmlRender(threadId, page)).toBe(undefined);
     }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("rejects an invalid browser configuration without retaining the published page", () =>
+    Effect.gen(function* () {
+      const error = new PreviewBrowser.PreviewBrowserInstallError({
+        detail: "T3CODE_SERVER_BROWSER_EXECUTABLE must be an absolute path to an executable file.",
+      });
+      yield* Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const config = yield* ServerConfig.ServerConfig;
+        const htmlRender = yield* HtmlRender.HtmlRender;
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        const threadId = ThreadId.make("thread-html-invalid-browser");
+        const page = { html: "<p>x</p>", title: "X", height: 200 };
+
+        expect(yield* htmlRender.publish({ threadId, ...page }).pipe(Effect.flip)).toEqual(error);
+        const stored = yield* fileSystem.readDirectory(config.attachmentsDir, { recursive: true });
+        expect(stored.filter((name) => name.endsWith(".html"))).toEqual([]);
+        expect(yield* mcpSessions.takeHtmlRender(threadId, page)).toBe(undefined);
+      }).pipe(Effect.provide(layerHtmlRender(undefined, Effect.fail(error))));
+    }),
   );
 
   it.effect("removes the page when publishing is interrupted", () =>

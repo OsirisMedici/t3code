@@ -126,7 +126,10 @@ export class HtmlRender extends Context.Service<
       readonly html: string;
       readonly title: string;
       readonly height: number;
-    }) => Effect.Effect<HtmlRenderReference, HtmlRenderPrepareError | HtmlRenderStoreError>;
+    }) => Effect.Effect<
+      HtmlRenderReference,
+      HtmlRenderPrepareError | HtmlRenderStoreError | PreviewBrowser.PreviewBrowserInstallError
+    >;
     readonly preview: (input: {
       readonly html: string;
       readonly width?: number | undefined;
@@ -390,9 +393,11 @@ const make = Effect.gen(function* () {
       return heights.toSorted(([left], [right]) => left - right);
     },
     Effect.catch((cause) =>
-      Effect.logWarning("Could not measure an HTML render; publishing it without heights.", {
-        cause,
-      }).pipe(Effect.as(undefined)),
+      cause._tag === "PreviewBrowserInstallError"
+        ? Effect.fail(cause)
+        : Effect.logWarning("Could not measure an HTML render; publishing it without heights.", {
+            cause,
+          }).pipe(Effect.as(undefined)),
     ),
   );
 

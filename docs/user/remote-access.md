@@ -238,7 +238,8 @@ For a background service, put the variable in `service.env` inside the server's
 T3 home, normally `~/.t3/service.env`, then restart the service. Set the path on
 the machine running the server, including when you connect from another device.
 An unset or blank variable keeps the bundled browser. A relative, missing,
-non-file or non-executable path produces an error rather than downloading a fallback.
+non-file or non-executable path produces an error for browser tabs and HTML
+publishing rather than downloading a fallback.
 
 Profiles stay in T3's data folder. You maintain the selected browser and its
 required libraries. This option does not change sandbox settings; on Linux,
