@@ -162,10 +162,41 @@ export const makePreviewBrowser = Effect.fn("PreviewBrowser.make")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const platform = yield* HostProcess.Platform;
+  const configured = (yield* HostProcess.Environment).T3CODE_SERVER_BROWSER_EXECUTABLE?.trim();
+  if (configured) {
+    const installed = path.isAbsolute(configured)
+      ? fs.stat(configured).pipe(
+          Effect.map((info) =>
+            info.type === "File" && (platform === "win32" || (info.mode & 0o111) !== 0)
+              ? Option.some(configured)
+              : Option.none<string>(),
+          ),
+          Effect.orElseSucceed(() => Option.none<string>()),
+        )
+      : Effect.succeed(Option.none<string>());
+    return PreviewBrowser.of({
+      installed,
+      executable: installed.pipe(
+        Effect.flatMap(
+          Option.match({
+            onSome: Effect.succeed,
+            onNone: () =>
+              Effect.fail(
+                new PreviewBrowserInstallError({
+                  detail:
+                    "T3CODE_SERVER_BROWSER_EXECUTABLE must be an absolute path to an executable file.",
+                }),
+              ),
+          }),
+        ),
+        Effect.withSpan("PreviewBrowser.executable"),
+      ),
+    });
+  }
   const http = yield* HttpClient.HttpClient;
   // Installs belong to the service, so they finish even when no caller is still waiting.
   const serviceScope = yield* Effect.scope;
-  const platform = yield* HostProcess.Platform;
   const arch = yield* HostProcess.Architecture;
   const release =
     options.release === undefined ? previewBrowserRelease(platform, arch) : options.release;

@@ -225,6 +225,26 @@ is the same browser [HTML renders](html-renders.md) use, so a host downloads it
 only once. Some Linux hosts need [setup](#browser-host-setup) before it can
 start.
 
+To use a Chromium-compatible browser installed on the server, set
+`T3CODE_SERVER_BROWSER_EXECUTABLE` to its absolute executable path before starting
+T3. Shared browser tabs and HTML renders use that executable instead of downloading
+the bundled browser:
+
+```sh
+T3CODE_SERVER_BROWSER_EXECUTABLE=/opt/google/chrome/chrome t3 serve
+```
+
+For a background service, put the variable in `service.env` inside the server's
+T3 home, normally `~/.t3/service.env`, then restart the service. Set the path on
+the machine running the server, including when you connect from another device.
+An unset or blank variable keeps the bundled browser. A relative, missing,
+non-file or non-executable path produces an error rather than downloading a fallback.
+
+Profiles stay in T3's data folder. You maintain the selected browser and its
+required libraries. This option does not change sandbox settings; on Linux,
+your administrator may need to allow the executable in AppArmor. Sites can still
+refuse sign-in, so selecting another browser does not guarantee account access.
+
 Agent tabs have separate storage and share a Chromium process. Take control before
 typing into an agent's tab, then release control when you want the agent to
 continue. Read-only connections can watch without changing the page.

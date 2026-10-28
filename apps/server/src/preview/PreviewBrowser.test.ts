@@ -78,6 +78,7 @@ const makeHarness = Effect.fn("test.makePreviewBrowser")(function* (
     readonly body?: Stream.Stream<Uint8Array>;
     readonly wait?: Duration.Input;
     readonly unsupported?: boolean;
+    readonly env?: NodeJS.ProcessEnv;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -103,6 +104,7 @@ const makeHarness = Effect.fn("test.makePreviewBrowser")(function* (
   }).pipe(
     Effect.provideService(HostProcess.Platform, hostPlatform),
     Effect.provideService(HostProcess.Architecture, "x64"),
+    Effect.provideService(HostProcess.Environment, options.env ?? {}),
     Effect.provideService(
       HttpClient.HttpClient,
       HttpClient.make((request) =>
@@ -121,6 +123,67 @@ const makeHarness = Effect.fn("test.makePreviewBrowser")(function* (
 });
 
 it.layer(NodeServices.layer)("PreviewBrowser", (it) => {
+  it.effect("uses a configured browser without downloading the bundled shell", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-custom-browser-test-" });
+      const configured = path.join(directory, "custom Chrome");
+      yield* fs.writeFileString(configured, "#!/bin/sh\n");
+      yield* fs.chmod(configured, 0o755);
+      const { browser, requests } = yield* makeHarness({
+        env: { T3CODE_SERVER_BROWSER_EXECUTABLE: `  ${configured}  ` },
+      });
+
+      expect(yield* browser.installed).toEqual(Option.some(configured));
+      expect(yield* browser.executable).toBe(configured);
+      expect(requests).toEqual([]);
+    }),
+  );
+
+  it.effect.each([
+    { name: "missing" },
+    { name: "directory" },
+    { name: "relative" },
+    ...(hostPlatform === "win32" ? [] : [{ name: "non-executable" }]),
+  ])("rejects a $name browser override without downloading a fallback", (testCase) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-custom-browser-test-" });
+      const configured =
+        testCase.name === "relative"
+          ? "relative-browser"
+          : testCase.name === "directory"
+            ? directory
+            : path.join(directory, "missing-browser");
+      if (testCase.name === "non-executable") {
+        yield* fs.writeFileString(configured, "#!/bin/sh\n");
+        yield* fs.chmod(configured, 0o644);
+      }
+      const { browser, requests } = yield* makeHarness({
+        env: { T3CODE_SERVER_BROWSER_EXECUTABLE: configured },
+      });
+
+      expect(yield* browser.installed).toEqual(Option.none());
+      const error = yield* browser.executable.pipe(Effect.flip);
+      expect(error._tag).toBe("PreviewBrowserInstallError");
+      expect(error.message).toContain("T3CODE_SERVER_BROWSER_EXECUTABLE");
+      expect(requests).toEqual([]);
+    }),
+  );
+
+  it.effect("treats a blank override as the bundled browser", () =>
+    Effect.gen(function* () {
+      const { browser, requests } = yield* makeHarness({
+        env: { T3CODE_SERVER_BROWSER_EXECUTABLE: "  " },
+      });
+
+      expect(yield* browser.executable).toContain(executableName);
+      expect(requests).toHaveLength(1);
+    }),
+  );
+
   it.effect("installs a verified download with its file modes and then reuses it", () =>
     Effect.gen(function* () {
       const { browser, fs, path, installRoot, requests } = yield* makeHarness();
