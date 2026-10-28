@@ -239,6 +239,7 @@ const cleanupFixture = (
     worktreeAfterDays: 8,
     worktreeOnDelete: true,
   },
+  gitfileDiagnostic?: string,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -284,7 +285,12 @@ const cleanupFixture = (
               (input.args.includes("remove") || input.args.includes("--porcelain"))
             )
               yield* fs.writeFileString(`${worktree}/tracked.txt`, "late edit\n");
-            return yield* git.execute(input);
+            const result = yield* git.execute(input);
+            return gitfileDiagnostic &&
+              result.exitCode !== 0 &&
+              input.operation === "StorageCleanup.branchChanged"
+              ? { ...result, stderr: gitfileDiagnostic }
+              : result;
           }),
         statusDetailsLocal: (...args) => {
           fullStatusCalls++;
@@ -1530,6 +1536,25 @@ describe("storage cleanup reports and local file policies", () => {
         expect(removed.entries[0]).toMatchObject({ outcome: "removed" });
         expect(removed.entries[0]?.bytes).toBeGreaterThan(0);
         expect(walked).toContain(root);
+      }),
+    ),
+  );
+  it.live.each([
+    "fatal: not a git repository: /missing-git-directory",
+    "fatal: gitfile does not point to a valid repository: /worktree/.git",
+  ])("keeps a worktree with an invalid gitfile (%s)", (diagnostic) =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const { service, fs, worktree } = yield* cleanupFixture(undefined, diagnostic);
+        const gitFile = yield* fs.readFileString(`${worktree}/.git`);
+        yield* fs.writeFileString(`${worktree}/.git`, "gitdir: /missing-git-directory\n");
+        expect((yield* service.runNow).entries[0]).toMatchObject({
+          outcome: "kept",
+          reason: "Repository or branch changed",
+        });
+        expect(yield* fs.readFileString(`${worktree}/tracked.txt`)).toBe("original\n");
+        yield* fs.writeFileString(`${worktree}/.git`, gitFile);
+        expect((yield* service.runNow).entries[0]).toMatchObject({ outcome: "removed" });
       }),
     ),
   );
