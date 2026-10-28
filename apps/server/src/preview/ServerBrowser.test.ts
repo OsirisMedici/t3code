@@ -728,6 +728,24 @@ it.live("keeps one fill-size viewer until control or connection changes", () =>
   ).pipe(Effect.provide(layer)),
 );
 
+it.live("releases an attached viewer after its page closes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, tabId } = yield* ready;
+      const viewerScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+        Scope.close(scope, Exit.void),
+      );
+      const viewer = yield* browser
+        .attachViewer(viewerInput(tabId, true))
+        .pipe(Effect.provideService(Scope.Scope, viewerScope));
+      yield* viewer.input({ type: "resize", width: 720, height: 1000 });
+      yield* Effect.promise(() => contexts[0]!.page.close());
+      expect(yield* Queue.takeAll(viewer.output)).toContainEqual({ _tag: "gone" });
+      expect((yield* Effect.exit(Scope.close(viewerScope, Exit.void)))._tag).toBe("Success");
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.live("does not let a watching panel resize an explicitly sized viewport", () =>
   Effect.scoped(
     Effect.gen(function* () {

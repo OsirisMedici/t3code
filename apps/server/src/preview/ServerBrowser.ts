@@ -2330,14 +2330,16 @@ const make = Effect.gen(function* () {
         Effect.promise(async () => {
           await tab.control.disconnect(viewer.id, () => releaseViewerInput(viewer, session));
           tab.viewers.delete(viewer);
-          await tab.control
-            .system(async () => {
-              if (tab.sizeViewer !== viewer) return;
-              tab.sizeViewer =
-                [...tab.viewers].find((candidate) => candidate.requestedSize !== null) ?? null;
-              if (tab.setting._tag === "fill" && tab.sizeViewer)
-                await applySetting(tab, tab.setting);
-            })
+          await Promise.resolve()
+            .then(() =>
+              tab.control.system(async () => {
+                if (tab.sizeViewer !== viewer) return;
+                tab.sizeViewer =
+                  [...tab.viewers].find((candidate) => candidate.requestedSize !== null) ?? null;
+                if (tab.setting._tag === "fill" && tab.sizeViewer)
+                  await applySetting(tab, tab.setting);
+              }),
+            )
             .catch(constVoid);
           broadcastControl(tab);
           reportLiveTabs();
