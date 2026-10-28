@@ -39,6 +39,16 @@ it("counts only confirmed hits, preserves their tier, and never transmits comman
   ]);
 });
 
+it("does not recreate a removed telemetry queue", async () => {
+  const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "cache-removed-queue-"));
+  try {
+    await flushTelemetry(home, {});
+    expect(NodeFS.readdirSync(home)).toEqual([]);
+  } finally {
+    NodeFS.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 it("deduplicates shared summaries and retries delivery without credentials in queued records", async () => {
   const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "cache-observer-"));
   const home = NodePath.join(root, "home");
@@ -178,6 +188,10 @@ it("delivers an event queued while the previous flusher releases its lock", asyn
       NodePath.join(state, "credentials.json"),
       JSON.stringify({ [endpoint]: { name: "alice", token: "secret-token" } }),
     );
+    NodeFS.writeFileSync(
+      NodePath.join(queue, "first.json"),
+      JSON.stringify({ endpoint, event: { id: "first" } }),
+    );
     using request = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation(async () => new Response(null, { status: 204 }));
@@ -196,7 +210,7 @@ it("delivers an event queued while the previous flusher releases its lock", asyn
     });
     await flushTelemetry(home, {});
     await competing;
-    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
     expect(NodeFS.readdirSync(queue)).toEqual([]);
   } finally {
     NodeFS.rmSync(home, { recursive: true, force: true });
