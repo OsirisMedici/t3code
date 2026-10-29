@@ -4,6 +4,11 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { beforeEach, vi } from "vite-plus/test";
 
+type RegisterBeforeSendHeaders = (
+  filter: Electron.WebRequestFilter,
+  listener: NonNullable<Parameters<Electron.WebRequest["onBeforeSendHeaders"]>[0]>,
+) => void;
+
 const { fromPartition, sessions } = vi.hoisted(() => ({
   fromPartition: vi.fn(),
   sessions: new Map<
@@ -15,6 +20,9 @@ const { fromPartition, sessions } = vi.hoisted(() => ({
       readonly setPermissionRequestHandler: ReturnType<typeof vi.fn>;
       readonly setPermissionCheckHandler: ReturnType<typeof vi.fn>;
       readonly setUserAgent: ReturnType<typeof vi.fn>;
+      readonly webRequest: {
+        readonly onBeforeSendHeaders: ReturnType<typeof vi.fn<RegisterBeforeSendHeaders>>;
+      };
     }
   >(),
 }));
@@ -32,6 +40,7 @@ vi.mock("electron", () => ({
 
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as BrowserSession from "./BrowserSession.ts";
+import { installBrowserIdentity } from "./BrowserIdentity.ts";
 
 const { showMessageBox } = vi.hoisted(() => ({
   showMessageBox: vi.fn<
@@ -49,6 +58,51 @@ const layer = BrowserSession.layer.pipe(
   Layer.provide(Layer.merge(NodeServices.layer, layerDialog)),
 );
 
+const nativeUserAgent =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) T3CodeNightly/0.1.4-nightly.20261027.3770 Chrome/152.0.7977.167 Electron/44.9.3 Safari/537.36";
+const chromeUserAgent =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) T3CodeNightly/0.1.4-nightly.20261027.3770 Chrome/152.0.7977.167 Safari/537.36";
+
+const userAgentTab = () => ({
+  getUserAgent: () => nativeUserAgent,
+  setUserAgent: vi.fn(),
+  isDestroyed: () => false,
+});
+
+const sendHeaders = (
+  browserSession: Electron.Session,
+  tab: ReturnType<typeof userAgentTab> | undefined,
+  url: string,
+  resourceType: Electron.OnBeforeSendHeadersListenerDetails["resourceType"] = "mainFrame",
+  requestHeaders: Record<string, string> = {
+    "User-Agent": tab?.getUserAgent() ?? nativeUserAgent,
+    "Sec-CH-UA": '"Chromium";v="152"',
+    Authorization: "test-header",
+  },
+) => {
+  const listener = vi.mocked(
+    browserSession.webRequest.onBeforeSendHeaders as RegisterBeforeSendHeaders,
+  ).mock.lastCall?.[1];
+  if (!listener) return requestHeaders;
+  let response: Electron.BeforeSendResponse = {};
+  listener(
+    {
+      id: 1,
+      method: "GET",
+      referrer: "",
+      timestamp: 0,
+      url,
+      resourceType,
+      requestHeaders,
+      webContents: tab as unknown as Electron.WebContents,
+    },
+    (result) => {
+      response = result;
+    },
+  );
+  return response.requestHeaders ?? requestHeaders;
+};
+
 describe("BrowserSession", () => {
   beforeEach(() => {
     sessions.clear();
@@ -57,10 +111,11 @@ describe("BrowserSession", () => {
       const browserSession = {
         clearCache: vi.fn(() => Promise.resolve()),
         clearStorageData: vi.fn(() => Promise.resolve()),
-        getUserAgent: vi.fn(() => "Mozilla/5.0 Electron/41.5.0 t3code/0.0.27"),
+        getUserAgent: vi.fn(() => nativeUserAgent),
         setPermissionRequestHandler: vi.fn(),
         setPermissionCheckHandler: vi.fn(),
         setUserAgent: vi.fn(),
+        webRequest: { onBeforeSendHeaders: vi.fn<RegisterBeforeSendHeaders>() },
       };
       sessions.set(partition, browserSession);
       return browserSession;
@@ -130,6 +185,9 @@ describe("BrowserSession", () => {
           setUserAgent: vi.fn((next: string) => {
             userAgent = next;
           }),
+          webRequest: {
+            onBeforeSendHeaders: vi.fn<RegisterBeforeSendHeaders>(),
+          },
         };
         sessions.set(partition, browserSession);
         return browserSession;
@@ -142,6 +200,112 @@ describe("BrowserSession", () => {
       const browserSession = sessions.get(partition);
       assert.isDefined(browserSession);
       assert.strictEqual(browserSession.getUserAgent(), nativeUserAgent);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("presents WhatsApp's initial request and page as the actual Chrome version", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      const browserSession = yield* browserSessions.getSession("whatsapp");
+      const tab = userAgentTab();
+      const headers = sendHeaders(browserSession, tab, "https://web.whatsapp.com/");
+      const page = { userAgent: nativeUserAgent, appVersion: nativeUserAgent.slice(8) };
+      installBrowserIdentity("https://web.whatsapp.com/", page);
+
+      assert.strictEqual(headers["User-Agent"], chromeUserAgent);
+      assert.strictEqual(page.userAgent, chromeUserAgent);
+      assert.strictEqual(page.appVersion, chromeUserAgent.slice(8));
+      assert.strictEqual(headers["Sec-CH-UA"], '"Chromium";v="152"');
+      assert.strictEqual(headers.Authorization, "test-header");
+      assert.strictEqual(browserSession.getUserAgent(), nativeUserAgent);
+      assert.strictEqual(tab.setUserAgent.mock.calls.length, 0);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("keeps the native identity for another site in the same tab and session", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      const browserSession = yield* browserSessions.getSession("whatsapp");
+      const tab = userAgentTab();
+      sendHeaders(browserSession, tab, "https://web.whatsapp.com/");
+      const headers = sendHeaders(browserSession, tab, "https://example.com/");
+      const page = { userAgent: nativeUserAgent, appVersion: nativeUserAgent.slice(8) };
+      installBrowserIdentity("https://example.com/", page);
+
+      assert.strictEqual(headers["User-Agent"], nativeUserAgent);
+      assert.strictEqual(page.userAgent, nativeUserAgent);
+      assert.strictEqual(page.appVersion, nativeUserAgent.slice(8));
+      assert.strictEqual(browserSession.getUserAgent(), nativeUserAgent);
+      assert.strictEqual(tab.setUserAgent.mock.calls.length, 0);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("limits compatibility to the exact secure WhatsApp Web origin", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      const browserSession = yield* browserSessions.getSession("whatsapp");
+      const tab = userAgentTab();
+      for (const url of [
+        "http://web.whatsapp.com/",
+        "https://web.whatsapp.com:444/",
+        "https://web.whatsapp.com.example.com/",
+        "https://example.com/?next=https://web.whatsapp.com/",
+      ]) {
+        const headers = sendHeaders(browserSession, tab, url);
+        const page = { userAgent: nativeUserAgent, appVersion: nativeUserAgent.slice(8) };
+        installBrowserIdentity(url, page);
+        assert.strictEqual(headers["User-Agent"], nativeUserAgent);
+        assert.strictEqual(page.userAgent, nativeUserAgent);
+      }
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("adjusts WhatsApp subframes without changing the embedding tab or other origins", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      const browserSession = yield* browserSessions.getSession("whatsapp");
+      const tab = userAgentTab();
+      const frameHeaders = sendHeaders(
+        browserSession,
+        tab,
+        "https://web.whatsapp.com/",
+        "subFrame",
+      );
+      const assetHeaders = sendHeaders(
+        browserSession,
+        tab,
+        "https://static.whatsapp.net/app.js",
+        "script",
+      );
+      assert.strictEqual(frameHeaders["User-Agent"], chromeUserAgent);
+      assert.strictEqual(assetHeaders["User-Agent"], nativeUserAgent);
+      assert.strictEqual(tab.getUserAgent(), nativeUserAgent);
+      assert.strictEqual(tab.setUserAgent.mock.calls.length, 0);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("handles lowercase and absent user-agent headers", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      const browserSession = yield* browserSessions.getSession("whatsapp");
+      const tab = userAgentTab();
+      const headers = sendHeaders(browserSession, tab, "https://web.whatsapp.com/", "mainFrame", {
+        "user-agent": nativeUserAgent,
+      });
+      assert.deepStrictEqual(headers, { "user-agent": chromeUserAgent });
+      assert.deepStrictEqual(
+        sendHeaders(browserSession, tab, "https://web.whatsapp.com/", "xhr", {}),
+        {},
+      );
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("adjusts background WhatsApp requests without requiring live web contents", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      const browserSession = yield* browserSessions.getSession("whatsapp");
+      const headers = sendHeaders(browserSession, undefined, "https://web.whatsapp.com/", "xhr");
+      assert.strictEqual(headers["User-Agent"], chromeUserAgent);
     }).pipe(Effect.provide(layer)),
   );
 
