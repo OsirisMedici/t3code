@@ -10,6 +10,7 @@ import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
+import { previewUserAgent } from "./BrowserIdentity.ts";
 
 const PREVIEW_PARTITION_PREFIX = "persist:t3code-preview-";
 /** Ephemeral partitions omit persist: but retain a product prefix so the webview gate recognizes them. */
@@ -248,7 +249,26 @@ export const make = Effect.gen(function* BrowserSessionMake() {
       return Effect.try({
         try: () => {
           const browserSession = session.fromPartition(partition);
-          // Rewriting Electron's native User-Agent makes Turnstile fail integrity checks with error 600010.
+          // WhatsApp rejects Electron's identity; global overrides break Turnstile.
+          browserSession.webRequest.onBeforeSendHeaders(
+            { urls: ["https://web.whatsapp.com/*"] },
+            (details, callback) => {
+              const header = Object.keys(details.requestHeaders).find(
+                (name) => name.toLowerCase() === "user-agent",
+              );
+              const current = header === undefined ? undefined : details.requestHeaders[header];
+              if (header === undefined || current === undefined) {
+                callback({});
+                return;
+              }
+              const userAgent = previewUserAgent(details.url, current);
+              callback(
+                userAgent === current
+                  ? {}
+                  : { requestHeaders: { ...details.requestHeaders, [header]: userAgent } },
+              );
+            },
+          );
           browserSession.setPermissionRequestHandler(
             (webContents, permission, callback, details) => {
               if (permission === "openExternal") {
