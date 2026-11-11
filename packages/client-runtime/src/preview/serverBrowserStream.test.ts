@@ -42,6 +42,13 @@ const target = {
 };
 
 describe("preview stream control", () => {
+  it("sends input to an agent tab immediately without a manual handoff", () => {
+    const { client, socket } = connect();
+    socket.control(agent);
+    expect(client.send({ type: "text", text: "human" })).toBe(true);
+    expect(socket.sent).toContain(JSON.stringify({ type: "text", text: "human" }));
+    client.stop();
+  });
   beforeEach(() => vi.stubGlobal("WebSocket", FakeSocket));
   afterEach(() => vi.unstubAllGlobals());
   const connect = () => {
@@ -91,7 +98,7 @@ describe("preview stream control", () => {
     client.stop();
   });
 
-  it("revokes input immediately on release and exposes pending dialog state", () => {
+  it("keeps input available after inactivity and exposes pending dialog state", () => {
     const { client, socket, onControl } = connect();
     const owned = {
       ...agent,
@@ -103,8 +110,10 @@ describe("preview stream control", () => {
     expect(client.send({ type: "dialog", accept: true, promptText: "answer" })).toBe(true);
     expect(client.send({ type: "releaseControl" })).toBe(true);
     socket.control({ ...agent, generation: 2 });
-    expect(client.send({ type: "text", text: "late input" })).toBe(false);
-    expect(client.send({ type: "dialog", accept: false })).toBe(false);
+    expect(client.send({ type: "text", text: "late input" })).toBe(true);
+    expect(client.send({ type: "dialog", accept: false })).toBe(true);
+    socket.control({ ...agent, controller: "another-viewer" });
+    expect(client.send({ type: "text", text: "other viewer" })).toBe(false);
     client.stop();
   });
 });

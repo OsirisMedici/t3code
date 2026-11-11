@@ -1,3 +1,4 @@
+import { previewStreamCanInteract } from "@t3tools/client-runtime/preview/server-browser-stream";
 import { Button } from "../../components/ui/Button";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import * as Dialog from "../../components/ui/Dialog";
@@ -53,6 +54,7 @@ type NativeStreamBridge = {
   readonly ref?: Ref<PreviewStreamRef>;
   readonly onUnauthorized: () => void;
   readonly onGone?: () => void;
+  readonly onPopup?: (tabId: string) => void;
   readonly onViewport?: (viewport: { readonly width: number; readonly height: number }) => void;
   readonly onControl?: (control: PreviewStreamControl | null) => void;
   readonly onPictureInPicture?: (state: PreviewPictureInPictureState, detail?: string) => void;
@@ -225,6 +227,7 @@ function PreviewStreamDocumentView({
   pdfUri,
   onUnauthorized,
   onGone,
+  onPopup,
   onViewport,
   onControl,
   onPictureInPicture,
@@ -330,16 +333,6 @@ function PreviewStreamDocumentView({
           <AppText className="text-xs text-foreground-muted">
             {previewStreamControlLabel(control)}
           </AppText>
-          {control?.canOperate ? (
-            <Button
-              label={control.controller === "you" ? "Release control" : "Take control"}
-              tone="secondary"
-              disabled={control.controller === "another-viewer"}
-              onPress={() =>
-                command({ type: control.controller === "you" ? "releaseControl" : "takeControl" })
-              }
-            />
-          ) : null}
         </View>
       ) : null}
       <View className="relative flex-1">
@@ -393,6 +386,9 @@ function PreviewStreamDocumentView({
                 return;
               case "viewport":
                 onViewport?.(message);
+                return;
+              case "popup":
+                onPopup?.(message.tabId);
                 return;
               case "clipboard":
                 void Clipboard.setStringAsync(message.text).catch(() => undefined);
@@ -448,7 +444,7 @@ function PreviewStreamDocumentView({
       {!compact && control?.dialog ? (
         <View className="absolute inset-x-3 top-16 gap-3 rounded-xl border border-secondary-border bg-secondary p-4">
           <AppText className="text-sm text-secondary-foreground">{control.dialog.message}</AppText>
-          {control.controller === "you" ? (
+          {previewStreamCanInteract(control) ? (
             <>
               {control.dialog.type === "prompt" ? (
                 <TextInput
@@ -480,7 +476,9 @@ function PreviewStreamDocumentView({
               </View>
             </>
           ) : (
-            <AppText className="text-xs text-foreground-muted">Take control to respond.</AppText>
+            <AppText className="text-xs text-foreground-muted">
+              Another viewer is interacting.
+            </AppText>
           )}
         </View>
       ) : null}

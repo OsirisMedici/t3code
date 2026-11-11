@@ -2,6 +2,7 @@ import {
   createPreviewFramePainter,
   createPreviewStreamClient,
   previewStreamModifiers,
+  previewStreamCanInteract,
   type PreviewStreamClient,
   type PreviewStreamControl,
   type PreviewStreamInput,
@@ -173,6 +174,7 @@ export function start(configuration: PreviewStreamConfiguration) {
         onFrame: (jpeg) => painter.paint(jpeg),
         onPointer: showAgentCursor,
         onClipboard: (text) => post({ type: "clipboard", text }),
+        onPopup: (tabId) => post({ type: "popup", tabId }),
         onDownload: (download) => post({ type: "download", ...download }),
         onFileChooser: (chooser) => post({ type: "fileChooser", chooser }),
         onViewport: (page) => {
@@ -181,7 +183,7 @@ export function start(configuration: PreviewStreamConfiguration) {
           post({ type: "viewport", width: page.width, height: page.height });
         },
         onProbe: (result) => {
-          if (control?.controller !== "you") return;
+          if (!previewStreamCanInteract(control)) return;
           const current = probe;
           if (!current || current.x !== result.x || current.y !== result.y) return;
           probeCache = {
@@ -206,7 +208,7 @@ export function start(configuration: PreviewStreamConfiguration) {
           control = nextControl;
           post({ type: "control", ...nextControl });
           if (nextControl.controller === "you") agentCursor.style.opacity = "0";
-          if (nextControl.controller !== "you") clearInput();
+          if (!previewStreamCanInteract(nextControl)) clearInput();
           else {
             input.disabled = !interactive;
             if (interactive && size && previous?.controller !== "you")
@@ -288,7 +290,12 @@ export function start(configuration: PreviewStreamConfiguration) {
   };
 
   const pagePoint = (clientX: number, clientY: number, clamp: boolean) => {
-    if (!viewport || canvas.width === 0 || canvas.height === 0 || control?.controller !== "you")
+    if (
+      !viewport ||
+      canvas.width === 0 ||
+      canvas.height === 0 ||
+      !previewStreamCanInteract(control)
+    )
       return null;
     const rect = canvas.getBoundingClientRect();
     const fit = Math.min(rect.width / canvas.width, rect.height / canvas.height);
@@ -362,7 +369,7 @@ export function start(configuration: PreviewStreamConfiguration) {
     modifiers: previewStreamModifiers(event),
   });
   const onPointerDown = (event: PointerEvent) => {
-    if (control?.controller !== "you") return;
+    if (!previewStreamCanInteract(control)) return;
     if (!event.isPrimary) return;
     event.preventDefault();
     if (event.pointerType !== "touch") {
@@ -400,7 +407,7 @@ export function start(configuration: PreviewStreamConfiguration) {
     send({ type: "probe", x: point.x, y: point.y });
   };
   const onPointerMove = (event: PointerEvent) => {
-    if (control?.controller !== "you") return;
+    if (!previewStreamCanInteract(control)) return;
     if (event.pointerType !== "touch") {
       const point = pagePoint(event.clientX, event.clientY, mouseButtons !== 0);
       if (!point) return;
@@ -504,9 +511,10 @@ export function start(configuration: PreviewStreamConfiguration) {
     queueWheel(point, event.deltaX * unit, event.deltaY * unit);
   };
   const preventDefault = (event: Event) => event.preventDefault();
+  const blurInput = () => send({ type: "blur" });
 
   const onKey = (action: "down" | "up", event: KeyboardEvent) => {
-    if (control?.controller !== "you") return;
+    if (!previewStreamCanInteract(control)) return;
     if (
       event.isComposing ||
       event.keyCode === 229 ||
@@ -516,6 +524,7 @@ export function start(configuration: PreviewStreamConfiguration) {
       return;
     }
     const shortcut = event.ctrlKey || event.metaKey;
+    event.stopPropagation();
     if (shortcut && event.key.toLowerCase() === "v") return;
     if (event.shiftKey && event.key === "Insert") return;
     // Enter carries "\r" like Puppeteer's key table, so forms submit and textareas break lines.
@@ -540,7 +549,7 @@ export function start(configuration: PreviewStreamConfiguration) {
       action === "down" &&
       !shortcut &&
       (text !== undefined || event.key === "Backspace" || event.key === "Delete");
-    if (!shortcut) event.preventDefault();
+    event.preventDefault();
   };
   const resetInput = () => {
     input.value = SENTINEL;
@@ -583,6 +592,12 @@ export function start(configuration: PreviewStreamConfiguration) {
     input.addEventListener("input", onInput);
     input.addEventListener("compositionend", onCompositionEnd);
     input.addEventListener("focus", resetInput);
+    input.addEventListener("blur", blurInput);
+    input.addEventListener("paste", (event) => {
+      event.preventDefault();
+      const text = event.clipboardData?.getData("text/plain");
+      if (text) send({ type: "text", text });
+    });
     // Copying the input would put its sentinel on this device's clipboard.
     input.addEventListener("copy", preventDefault);
     input.addEventListener("cut", preventDefault);

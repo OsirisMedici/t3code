@@ -751,7 +751,7 @@ export class PreviewAutomationControlInterruptedError extends Schema.TaggedError
     if (this.reason === "agentMismatch")
       return "This browser tab belongs to another agent session or a human. Open your own tab.";
     if (this.reason === "humanControl")
-      return "A human controls this browser tab. Wait until they release control.";
+      return "A person is interacting with this browser tab. Wait until they pause, then refresh your snapshot before acting.";
     if (this.reason === "tabRequired")
       return "Multiple browser tabs belong to this session. Pass a tabId from preview_open or from the tabs listed by preview_status.";
     if (this.reason === "dialogPending")

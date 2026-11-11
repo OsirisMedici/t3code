@@ -599,6 +599,92 @@ it.live("enforces provider ownership and explicit targets when a session has mul
   ).pipe(Effect.provide(layer)),
 );
 
+it.live("delivers human input to an agent tab without manual takeover and releases on blur", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, broker, tabId } = yield* ready;
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+      yield* viewer.input({ type: "text", text: "human input" });
+      expect(contexts[0]!.sessions.at(-1)!.send).toHaveBeenCalledWith("Input.insertText", {
+        text: "human input",
+      });
+      const blocked = yield* broker
+        .invoke({ scope, tabId, operation: "evaluate", input: { expression: "overwrite()" } })
+        .pipe(Effect.flip);
+      expect(blocked).toMatchObject({ reason: "humanControl" });
+      const revealed = yield* broker.invoke<PreviewAutomationStatus>({ scope, tabId, operation: "open", input: { open: true } });
+      expect(revealed.tabId).toBe(tabId);
+      const manager = yield* Manager.PreviewManager;
+      const { sessions } = yield* manager.list({ threadId: scope.thread.threadId });
+      expect(sessions.find((session) => session.tabId === tabId)?.revealRequest).toMatchObject({ force: true });
+      yield* viewer.input({ type: "blur" });
+      expect(
+        yield* broker.invoke({
+          scope,
+          tabId,
+          operation: "evaluate",
+          input: { expression: "resume()" },
+        }),
+      ).toBe("evaluated");
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("reveals a human-opened login popup even when the opener belongs to an agent", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, tabId } = yield* ready;
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+      yield* viewer.input({ type: "text", text: "human" });
+      const manager = yield* Manager.PreviewManager;
+      const events = yield* manager.subscribeEvents;
+      const popup = makeContext().page;
+      contexts[0]!.page.emit("popup", popup);
+      let opened = yield* PubSub.take(events);
+      while (opened.type !== "opened") opened = yield* PubSub.take(events);
+      expect(opened.snapshot).toMatchObject({ reveal: true });
+      let event = yield* Queue.take(viewer.output);
+      while (event._tag !== "popup") event = yield* Queue.take(viewer.output);
+      const { sessions } = yield* manager.list({ threadId: scope.thread.threadId });
+      expect(sessions.find((session) => session.tabId === event.tabId)).toMatchObject({
+        reveal: true,
+      });
+      expect(popup.close).not.toHaveBeenCalled();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("fits an agent-owned fill viewport to its viewer without taking control", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, broker, tabId } = yield* ready;
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+      const page = contexts[0]!.page;
+      page.setViewportSize.mockClear();
+      yield* Queue.clear(viewer.output);
+
+      yield* viewer.input({ type: "resize", width: 856, height: 804 });
+      expect(page.viewportSize()).toEqual({ width: 856, height: 804 });
+      expect(yield* Queue.takeAll(viewer.output)).toContainEqual({
+        _tag: "viewport",
+        width: 856,
+        height: 804,
+      });
+      expect(
+        yield* broker.invoke({
+          scope,
+          tabId,
+          operation: "evaluate",
+          input: { expression: "stillOwnedByAgent()" },
+        }),
+      ).toBe("evaluated");
+
+      yield* viewer.input({ type: "resize", width: 640, height: 900 });
+      expect(page.viewportSize()).toEqual({ width: 640, height: 900 });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.live("streams to a read-only viewer without allowing takeover, input, or viewport changes", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1109,6 +1195,7 @@ it.live("agents read a human's tab with no arguments and act on it only while no
       });
       const tabId = PreviewTabId.make(opened.tabId);
       const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+      yield* viewer.input({ type: "text", text: "human" });
       const status = yield* broker.invoke<PreviewAutomationStatus>({
         scope,
         operation: "status",

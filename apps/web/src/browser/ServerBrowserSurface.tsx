@@ -2,6 +2,7 @@ import {
   createPreviewFramePainter,
   createPreviewStreamClient,
   previewStreamControlLabel,
+  previewStreamCanInteract,
   previewStreamModifiers,
   type PreviewStreamClient,
   type PreviewStreamControl,
@@ -24,6 +25,7 @@ import {
   type KeyboardEvent,
   type PointerEvent,
   type Ref,
+  useCallback,
   useEffect,
   useEffectEvent,
   useImperativeHandle,
@@ -37,6 +39,7 @@ import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { toastManager } from "~/components/ui/toast";
 import { cn } from "~/lib/utils";
+import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { refreshPreviewStreamAccess, usePreviewStreamAccess } from "~/state/previewStream";
 import { observeResize } from "~/lib/observeResize";
 
@@ -98,7 +101,7 @@ const pressedButtonOf = (buttons: number): PreviewStreamMouseButton =>
 /** Browsers may refuse a write that arrives after the key press; a toast button is a fresh gesture. */
 async function copyPageText(text: string) {
   try {
-    await navigator.clipboard.writeText(text);
+    await writeTextToClipboard(text, "browser page");
   } catch {
     const id = toastManager.add({
       type: "info",
@@ -107,7 +110,7 @@ async function copyPageText(text: string) {
         children: "Copy",
         onClick: () => {
           toastManager.close(id);
-          void navigator.clipboard.writeText(text).catch(() => undefined);
+          void writeTextToClipboard(text, "browser page").catch(() => undefined);
         },
       },
     });
@@ -218,7 +221,7 @@ export function ServerBrowserSurface(props: {
     clientRef.current?.send(input);
   };
 
-  const clearInput = () => {
+  const clearInput = useCallback(() => {
     if (inputFrameRef.current !== null) cancelAnimationFrame(inputFrameRef.current);
     inputFrameRef.current = null;
     pendingMoveRef.current = pendingWheelRef.current = null;
@@ -229,7 +232,7 @@ export function ServerBrowserSurface(props: {
     keySentRef.current = false;
     if (inputRef.current) inputRef.current.value = INPUT_SENTINEL;
     inputRef.current?.blur();
-  };
+  }, []);
 
   const flushInput = () => {
     if (inputFrameRef.current !== null) cancelAnimationFrame(inputFrameRef.current);
@@ -262,7 +265,12 @@ export function ServerBrowserSurface(props: {
   const pagePoint = (clientX: number, clientY: number, clamp: boolean): PagePoint | null => {
     const canvas = canvasRef.current;
     const viewport = viewportRef.current;
-    if (!canvas || !viewport || !hasFrameRef.current || controlRef.current?.controller !== "you")
+    if (
+      !canvas ||
+      !viewport ||
+      !hasFrameRef.current ||
+      !previewStreamCanInteract(controlRef.current)
+    )
       return null;
     const rect = canvas.getBoundingClientRect();
     const fit = Math.min(rect.width / canvas.width, rect.height / canvas.height);
@@ -371,7 +379,7 @@ export function ServerBrowserSurface(props: {
           painter.paint(jpeg);
         },
         onProbe: (result) => {
-          if (controlRef.current?.controller !== "you") return;
+          if (!previewStreamCanInteract(controlRef.current)) return;
           lastProbeRef.current = { ...result, at: performance.now() };
           const probe = probeRef.current;
           if (!probe || probe.x !== result.x || probe.y !== result.y) return;
@@ -404,7 +412,7 @@ export function ServerBrowserSurface(props: {
             next.dialog?.defaultValue !== previous?.dialog?.defaultValue
           )
             setPromptText(next.dialog?.defaultValue ?? "");
-          if (next.controller !== "you") {
+          if (!previewStreamCanInteract(next)) {
             clearInput();
           } else if (previous?.controller !== "you") {
             const size = sizeRef.current;
@@ -484,6 +492,15 @@ export function ServerBrowserSurface(props: {
     return () => canvas.removeEventListener("wheel", onWheel);
   }, [pagePoint, queueWheel]);
 
+  useEffect(() => {
+    const blur = () => {
+      flushInput();
+      send({ type: "blur" });
+    };
+    window.addEventListener("blur", blur);
+    return () => window.removeEventListener("blur", blur);
+  }, [flushInput, send]);
+
   useEffect(
     () => () => {
       if (inputFrameRef.current !== null) cancelAnimationFrame(inputFrameRef.current);
@@ -492,7 +509,7 @@ export function ServerBrowserSurface(props: {
   );
 
   const handlePointer = (event: PointerEvent<HTMLCanvasElement>) => {
-    if (controlRef.current?.controller !== "you") return;
+    if (!previewStreamCanInteract(controlRef.current)) return;
     const { type, pointerId, clientX, clientY } = event;
     const cancelled = type === "pointercancel";
     const touch = touchRef.current;
@@ -641,7 +658,7 @@ export function ServerBrowserSurface(props: {
   };
 
   const handleKey = (action: "down" | "up", event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (controlRef.current?.controller !== "you") return;
+    if (!previewStreamCanInteract(controlRef.current)) return;
     keySentRef.current = false;
     if (
       event.nativeEvent.isComposing ||
@@ -658,6 +675,7 @@ export function ServerBrowserSurface(props: {
       return;
     }
     const shortcut = event.ctrlKey || event.metaKey;
+    event.stopPropagation();
     if (shortcut && event.key.toLowerCase() === "v") return;
     if (event.shiftKey && event.key === "Insert") return;
     // Enter carries "\r" like Puppeteer's key table, so forms submit and textareas break lines.
@@ -682,7 +700,6 @@ export function ServerBrowserSurface(props: {
       action === "down" &&
       !shortcut &&
       (text !== undefined || event.key === "Backspace" || event.key === "Delete");
-    if (shortcut) return;
     event.preventDefault();
     event.stopPropagation();
   };
@@ -716,18 +733,6 @@ export function ServerBrowserSurface(props: {
         <span role="status" className="text-xs text-muted-foreground">
           {previewStreamControlLabel(control)}
         </span>
-        {control?.canOperate ? (
-          <Button
-            variant="outline"
-            size="xs"
-            disabled={control.controller === "another-viewer"}
-            onClick={() =>
-              send({ type: control.controller === "you" ? "releaseControl" : "takeControl" })
-            }
-          >
-            {control.controller === "you" ? "Release control" : "Take control"}
-          </Button>
-        ) : null}
       </div>
       <div className="relative min-h-0 flex-1">
         {pdfUrl ? (
@@ -763,13 +768,17 @@ export function ServerBrowserSurface(props: {
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
-          disabled={pdfUrl !== null || control?.controller !== "you"}
+          disabled={pdfUrl !== null || !previewStreamCanInteract(control)}
           defaultValue={INPUT_SENTINEL}
           onFocus={(event) => resetInput(event.currentTarget)}
           className="sr-only top-0 left-0 text-base"
           onKeyDown={(event) => handleKey("down", event)}
           onKeyUp={(event) => handleKey("up", event)}
           onInput={handleInput}
+          onBlur={() => {
+            flushInput();
+            send({ type: "blur" });
+          }}
           onCompositionEnd={(event) => {
             const text = event.data.replace(/^\u200b/, "");
             if (text) send({ type: "text", text });
@@ -822,7 +831,7 @@ export function ServerBrowserSurface(props: {
             aria-label="Browser dialog"
           >
             <p className="break-words text-sm">{control.dialog.message}</p>
-            {control.controller === "you" ? (
+            {previewStreamCanInteract(control) ? (
               <>
                 {control.dialog.type === "prompt" ? (
                   <Input
@@ -854,7 +863,7 @@ export function ServerBrowserSurface(props: {
                 </div>
               </>
             ) : (
-              <p className="text-xs text-muted-foreground">Take control to respond.</p>
+              <p className="text-xs text-muted-foreground">Another viewer is interacting.</p>
             )}
           </div>
         ) : null}

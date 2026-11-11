@@ -23,6 +23,7 @@ export type PreviewStreamMessage =
     }
   | { readonly type: "unauthorized" }
   | { readonly type: "gone" }
+  | { readonly type: "popup"; readonly tabId: string }
   | ({ readonly type: "hostSetup" } & PreviewStreamHostSetup)
   | { readonly type: "viewport"; readonly width: number; readonly height: number }
   | { readonly type: "clipboard"; readonly text: string }

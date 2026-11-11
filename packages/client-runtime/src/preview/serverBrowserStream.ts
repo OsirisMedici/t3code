@@ -26,18 +26,21 @@ export interface PreviewStreamControl {
   };
 }
 
+export const previewStreamCanInteract = (control: PreviewStreamControl | null): boolean =>
+  control?.canOperate === true && control.controller !== "another-viewer";
+
 export const previewStreamControlLabel = (control: PreviewStreamControl | null): string =>
   !control
     ? "Connecting..."
     : !control.canOperate
       ? "Read-only"
       : control.controller === "you"
-        ? "You have control"
+        ? "You're interacting"
         : control.controller === "agent"
-          ? "Agent has control"
+          ? "Shared with agent"
           : control.controller === "another-viewer"
-            ? "Another viewer has control"
-            : "Watching";
+            ? "Another viewer is interacting"
+            : "Ready";
 
 const isPreviewStreamDialog = (value: unknown): value is PreviewStreamControl["dialog"] =>
   value === null ||
@@ -53,6 +56,7 @@ const isPreviewStreamDialog = (value: unknown): value is PreviewStreamControl["d
 export type PreviewStreamInput =
   | { readonly type: "takeControl" }
   | { readonly type: "releaseControl" }
+  | { readonly type: "blur" }
   | { readonly type: "dialog"; readonly accept: boolean; readonly promptText?: string }
   | { readonly type: "viewport"; readonly setting: PreviewViewportSetting }
   | {
@@ -374,8 +378,7 @@ export function createPreviewStreamClient(
   return {
     send: (input) => {
       if (socket?.readyState !== WebSocket.OPEN) return false;
-      if (!control?.canOperate) return false;
-      if (input.type !== "takeControl" && control.controller !== "you") return false;
+      if (!previewStreamCanInteract(control)) return false;
       socket.send(JSON.stringify(input));
       return true;
     },

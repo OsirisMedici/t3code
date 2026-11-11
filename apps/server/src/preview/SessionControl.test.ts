@@ -1,8 +1,107 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
 describe("SessionControl", () => {
+  it("delivers accepted input before blur releases the reservation", async () => {
+    const control = new SessionControl("agent");
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const events: string[] = [];
+    const running = control.agent("agent", async () => {
+      started.resolve();
+      await finish.promise;
+    });
+    await started.promise;
+    const typing = control.interact("viewer", async () => events.push("typed"));
+    const blurred = control.finishInteraction("viewer", async () => {
+      events.push("released keys");
+    });
+    finish.resolve();
+    await Promise.all([running, typing, blurred]);
+    expect(events).toEqual(["typed", "released keys"]);
+    await expect(control.agent("agent", async () => "resumed")).resolves.toBe("resumed");
+    await control.close();
+  });
+
+  it("lets new input correct a pending navigation while automatic release drains it", async () => {
+    const control = new SessionControl("agent");
+    const navigation = Promise.withResolvers<void>();
+    await control.interact("viewer", async () => control.trackUntilHandoff(navigation.promise));
+    const blurred = control.finishInteraction("viewer");
+    await expect(control.interact("viewer", async () => "corrected URL")).resolves.toBe(
+      "corrected URL",
+    );
+    navigation.resolve();
+    await blurred;
+    expect(control.controller).toBe("viewer");
+    await control.close();
+  });
+
+  it("automatically yields to input, drains running work, and resumes after inactivity", async () => {
+    vi.useFakeTimers();
+    try {
+      const control = new SessionControl("agent");
+      const started = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      const events: string[] = [];
+      const running = control.agent("agent", async () => {
+        started.resolve();
+        await finish.promise;
+        events.push("agent finished");
+      });
+      await started.promise;
+      const stale = expect(
+        control.agent("agent", async () => events.push("stale")),
+      ).rejects.toThrow();
+      const human = control.interact("viewer", async () => events.push("typed"));
+      await expect(control.agent("agent", async () => "racing")).rejects.toMatchObject({
+        reason: "humanControl",
+      });
+      finish.resolve();
+      await Promise.all([running, stale, human]);
+      expect(events).toEqual(["agent finished", "typed"]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await control.interact("viewer", async () => events.push("pasted"));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(control.controller).toBe("viewer");
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(control.agent("agent", async () => "resumed")).resolves.toBe("resumed");
+      await control.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an active drag reserved until release and cleans up before agents resume", async () => {
+    vi.useFakeTimers();
+    try {
+      const control = new SessionControl("agent");
+      let held = true;
+      const cleaned = vi.fn(async () => {});
+      await control.interact(
+        "viewer",
+        async () => {},
+        () => held,
+        cleaned,
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(control.controller).toBe("viewer");
+      held = false;
+      await control.interact(
+        "viewer",
+        async () => {},
+        () => held,
+        cleaned,
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+      await control.agent("agent", async () => expect(cleaned).toHaveBeenCalledOnce());
+      await control.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns an action result before tracked navigation but drains it before already queued actions", async () => {
     const control = new SessionControl("agent");
     const committed = Promise.withResolvers<void>();

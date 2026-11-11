@@ -1,3 +1,4 @@
+import { previewStreamCanInteract } from "@t3tools/client-runtime/preview/server-browser-stream";
 import { SheetHeader } from "../../components/ui/SheetHeader";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import * as Dialog from "../../components/ui/Dialog";
@@ -188,7 +189,8 @@ function BrowserPreviewScreen({
               background={themeVariables["--color-sheet-solid"]}
               onPictureInPicture={onPictureInPicture}
               onStreamingChange={setStreaming}
-              onControl={(control) => setCanControl(control?.controller === "you")}
+              onPopup={selectTab}
+              onControl={(control) => setCanControl(previewStreamCanInteract(control))}
             />
           ) : (
             <View className="flex-1" />

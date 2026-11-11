@@ -735,9 +735,10 @@ const make = Effect.gen(function* () {
     if (!desktop) await recordCopies(cdp);
     page.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
     page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
-    const control = new SessionControl(snapshot.automationOwner ?? null, () =>
-      ServerBrowserPage.invalidateRefs(page),
-    );
+    const control = new SessionControl(snapshot.automationOwner ?? null, () => {
+      ServerBrowserPage.invalidateRefs(page);
+      broadcastControl(tab);
+    });
     const tab: ServerTab = {
       threadId: ThreadId.make(snapshot.threadId),
       tabId: snapshot.tabId,
@@ -1056,6 +1057,8 @@ const make = Effect.gen(function* () {
       );
     }
     if (tab.fileChooser === open) closeFileChooser(tab);
+    const viewer = [...tab.viewers].find((candidate) => candidate.id === open.offeredTo);
+    if (viewer) await tab.control.interact(viewer.id, async () => {});
     return true;
   };
   const uploadFiles = async (tab: ServerTab, input: PreviewAutomationUploadInput) => {
@@ -1188,9 +1191,8 @@ const make = Effect.gen(function* () {
         ...(/^https?:/i.test(url) ? { url } : {}),
         runtime: "server",
         ...(opener.profileId === undefined ? {} : { profileId: opener.profileId }),
-        ...(opener.control.agentId === null
-          ? {}
-          : { automationOwner: opener.control.agentId, reveal: false }),
+        reveal: controller !== undefined || opener.control.agentId === null,
+        ...(opener.control.agentId === null ? {} : { automationOwner: opener.control.agentId }),
         beforePublish: (snapshot) =>
           adoptedPages.set(tabKey(snapshot.threadId, snapshot.tabId), {
             page: popup,
@@ -1199,8 +1201,7 @@ const make = Effect.gen(function* () {
       }),
     ).then(
       (snapshot) => {
-        if (opener.control.agentId === null)
-          controller?.push({ _tag: "popup", tabId: snapshot.tabId });
+        controller?.push({ _tag: "popup", tabId: snapshot.tabId });
       },
       async () => {
         await popup.close().catch(constVoid);
@@ -1791,6 +1792,19 @@ const make = Effect.gen(function* () {
             "A browser dialog is pending. Read preview_status and use preview_dialog first.",
             "dialogPending",
           );
+        if (existing && !url && tab.control.agentMayAct(request.agentSessionId)) {
+          const reveal = open.open ?? open.show;
+          if (reveal !== false) {
+            await Effect.runPromise(
+              manager.requestReveal({
+                threadId: tab.threadId,
+                tabId: tab.tabId,
+                force: reveal === true,
+              }),
+            );
+          }
+          return statusWithTitle(tab, request.agentSessionId);
+        }
         return tab.control.agent(
           request.agentSessionId,
           async () => {
@@ -1883,11 +1897,7 @@ const make = Effect.gen(function* () {
     }
     const agentSessionId = request.agentSessionId!;
 
-    if (
-      READ_OPERATIONS.has(request.operation) &&
-      tab.control.agentId !== agentSessionId &&
-      !tab.control.agentCanActNow(agentSessionId)
-    ) {
+    if (READ_OPERATIONS.has(request.operation)) {
       return tab.control.observe(async () => {
         if (tab.dialog)
           throw new BrowserControlInterrupted(
@@ -2325,9 +2335,6 @@ const make = Effect.gen(function* () {
           reportLiveTabs();
         }),
     );
-    if (input.canOperate && tab.control.agentId === null && tab.control.controller === null) {
-      yield* Effect.promise(() => tab.control.take(viewer.id));
-    }
     broadcastControl(tab);
     pushFileChooser(tab);
     // Full scale: a scaled capture would flash in every other viewer.
@@ -2416,20 +2423,59 @@ const make = Effect.gen(function* () {
               );
               broadcastControl(tab);
               await releasing;
-            } else if (
-              message.type === "dialog" &&
-              tab.control.controller === viewer.id &&
-              typeof message.accept === "boolean"
-            ) {
+            } else if (message.type === "blur") {
+              if ((tab.fileChooser || tab.dialog) && tab.control.controller === viewer.id) {
+                await tab.control.human(viewer.id, () => releaseViewerInput(viewer, session));
+              } else {
+                await tab.control.finishInteraction(viewer.id, () =>
+                  releaseViewerInput(viewer, session),
+                );
+              }
+            } else if (message.type === "resize") {
+              if (tab.control.controller !== null && tab.control.controller !== viewer.id) return;
+              await tab.control.system(() => dispatchViewerInput(tab, session, viewer, message));
+            } else if (message.type === "probe") {
+              await tab.control.observe(() => dispatchViewerInput(tab, session, viewer, message));
+            } else if (message.type === "dialog" && typeof message.accept === "boolean") {
+              const taking = tab.control.take(viewer.id);
+              // A pending dialog can be holding the action queue itself.
+              if (tab.control.controller !== viewer.id) return await taking;
               await resolveDialog(tab, {
                 accept: message.accept,
                 ...(typeof message.promptText === "string"
                   ? { promptText: message.promptText }
                   : {}),
               });
-            } else {
-              await tab.control.human(viewer.id, () =>
-                dispatchViewerInput(tab, session, viewer, message),
+              await taking;
+              await tab.control.interact(viewer.id, async () => {});
+            } else if (
+              [
+                "mouse",
+                "wheel",
+                "key",
+                "text",
+                "navigate",
+                "history",
+                "reload",
+                "viewport",
+              ].includes(String(message.type))
+            ) {
+              if (
+                message.type === "mouse" &&
+                message.action === "move" &&
+                !num(message.buttons) &&
+                tab.control.controller !== viewer.id
+              )
+                return;
+              await tab.control.interact(
+                viewer.id,
+                () => dispatchViewerInput(tab, session, viewer, message),
+                () =>
+                  viewer.pressedKeys.size > 0 ||
+                  viewer.pressedButtons.size > 0 ||
+                  tab.fileChooser !== null ||
+                  tab.dialog !== null,
+                () => releaseViewerInput(viewer, session),
               );
             }
           } catch {

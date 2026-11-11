@@ -212,15 +212,24 @@ its required libraries. Sandboxing stays enabled; on Linux, your administrator
 may need to allow the custom executable in AppArmor. Sites can still refuse
 sign-in, so selecting another browser does not guarantee account access.
 
-Agent tabs have separate storage and share a Chromium process. Take control before
-typing into an agent's tab, then release control when you want the agent to
-continue. Read-only connections can watch without changing the page.
+Click, scroll, type, and paste directly into the browser. Agent actions yield while
+you interact and become available again after you pause. A held key or mouse button
+keeps your interaction active; leaving the page releases it. Read-only connections
+can watch without changing the page.
 
-While you have control, the tab works with your device: text the page copies or
+The tab works with your device: text the page copies or
 cuts goes to your clipboard, a file picker on the page opens your device's
 picker, and a finished download is offered for you to save. Popups such as
 sign-in windows open as their own tabs. Downloads stay on the host until the
 tab closes. Audio does not play on your device.
+
+Logins in a regular browser profile survive refreshes, new tabs, closing and
+reopening tabs, and restarting the browser or T3 host when the site stores a
+persistent session. Keep using the same profile on the same host: another host or
+the desktop browser has separate storage. Incognito and unprofiled isolated agent
+tabs are temporary. Sites can expire sessions, require reauthentication, or use
+session-only cookies that end on restart. Clearing a profile's cookies or storage
+can sign you out. Closing a viewer does not clear its host profile.
 
 On a phone, tap the floating preview's corner dot to show its controls, then
 **Pop into separate window** to keep watching in picture-in-picture over other

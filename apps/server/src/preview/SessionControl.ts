@@ -27,6 +27,9 @@ export class SessionControl {
   private owner: string | null = null;
   private epoch = 0;
   private closed = false;
+  private idleTimer: ReturnType<typeof setTimeout> | undefined;
+  private interactions = 0;
+  private interactionVersion = 0;
 
   constructor(agentId: string | null, onGenerationChange: () => void = () => {}) {
     this.agentId = agentId;
@@ -68,6 +71,8 @@ export class SessionControl {
   }
 
   private changeOwner(owner: string | null) {
+    clearTimeout(this.idleTimer);
+    this.idleTimer = undefined;
     this.owner = owner;
     this.epoch++;
     this.onGenerationChange();
@@ -126,6 +131,47 @@ export class SessionControl {
 
   human<A>(viewerId: string, run: () => Promise<A>) {
     return this.action(() => this.owner === viewerId, run);
+  }
+
+  /** Reserve immediately so queued automation cannot overwrite newly arriving input. */
+  async interact<A>(
+    viewerId: string,
+    run: () => Promise<A>,
+    held: () => boolean = () => false,
+    afterDrain: () => Promise<void> = async () => {},
+  ) {
+    this.assertOpen();
+    if (this.owner !== null && this.owner !== viewerId) {
+      throw new BrowserControlInterrupted("Another viewer is interacting with this browser tab.");
+    }
+    if (this.owner !== viewerId) this.changeOwner(viewerId);
+    clearTimeout(this.idleTimer);
+    this.interactionVersion++;
+    this.interactions++;
+    try {
+      return await this.human(viewerId, run);
+    } finally {
+      this.interactions--;
+      if (!this.closed && this.owner === viewerId && this.interactions === 0 && !held()) {
+        this.idleTimer = setTimeout(() => {
+          if (!held()) void this.finishInteraction(viewerId, afterDrain).catch(() => {});
+        }, 1_500);
+      }
+    }
+  }
+
+  async finishInteraction(viewerId: string, afterDrain: () => Promise<void> = async () => {}) {
+    const version = this.interactionVersion;
+    await this.enqueue(async () => {
+      if (!this.closed && this.owner === viewerId) await afterDrain();
+    });
+    // Keep navigation drains outside the queue so a person can correct a stalled URL.
+    await Promise.all(this.handoff);
+    await this.enqueue(async () => {
+      if (!this.closed && this.owner === viewerId && this.interactionVersion === version) {
+        this.changeOwner(null);
+      }
+    });
   }
 
   async take(viewerId: string) {
